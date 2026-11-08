@@ -13,7 +13,7 @@ extra=()
 cmake -S . -B build \
   -DCMAKE_TOOLCHAIN_FILE="$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" \
   -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="$API" \
-  -DCMAKE_BUILD_TYPE=Release "${extra[@]}"
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="-include cstdlib -include cstdio -include cstring" "${extra[@]}"
 cmake --build build -j"$(nproc 2>/dev/null || echo 4)"
 
 # The folder name is the runtime mod id - keep it stable.

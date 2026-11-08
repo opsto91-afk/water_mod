@@ -46,8 +46,11 @@ int main() {
     Config c;
     std::vector<std::string> warn;
     bool ok = parseConfig("# c\nwater_delay = 1\nlava_delay_overworld=7 # x\nbogus=3\nsource=abc\nnoequals\n", c, warn);
-    assert(ok && c.waterDelay == 1 && c.lavaDelayOverworld == 7 && c.lavaDelayNether == 10 && c.sourceCount == 2);
+    assert(ok && c.waterDelay == 1 && c.lavaDelayOverworld == 7 && c.lavaDelayNether == 10 && c.sourceCount == 2 && !c.dryRun);
     assert(warn.size() == 3);
+    Config dr;
+    std::vector<std::string> w4;
+    assert(parseConfig("dry_run=1\n", dr, w4) && dr.dryRun && w4.empty());
     Config d;
     std::vector<std::string> w2;
     assert(parseConfig(defaultConfigText(), d, w2) && w2.empty() && d.waterDelay == 5 && d.sourceCount == 2);
@@ -97,6 +100,11 @@ int main() {
   put(mem, 0xFC, 0x528000A1u);
   put(mem, 0x300, 0xD65F03C0u);  // ret
   assert(verify(mem.data(), mem.size(), t).find("unexpected instruction") != std::string::npos);
+
+  // 5b) unreadable memory is reported, never dereferenced
+  put(mem, 0x300, 0x528003C8u);
+  assert(!verify([](uint64_t, uint32_t&) { return false; }, t).empty());
+  assert(verify([&](uint64_t off, uint32_t& w) { if (off > 0x300) return false; w = rd(mem, off); return true; }, t).find("not readable") != std::string::npos);
 
   // 6) failing writer is reported, not hidden
   put(mem, 0x300, 0x528003C8u);

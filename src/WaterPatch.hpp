@@ -6,6 +6,7 @@
 // Minecraft version) NOTHING is written.
 #pragma once
 #include <cstdint>
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -16,6 +17,7 @@ struct Config {
   uint32_t lavaDelayOverworld = 30;   // lava, normal dimensions                (vanilla 30)
   uint32_t lavaDelayNether = 10;      // lava, "ultra warm" dimensions          (vanilla 10)
   uint32_t sourceCount = 2;           // adjacent sources needed for a new one  (vanilla 2)
+  bool dryRun = false;                // true = verify + log only, never write memory
 };
 
 // Parses "key=value" lines ('#' starts a comment). Unknown keys / bad values are reported in `warnings`.
@@ -57,8 +59,12 @@ struct Writer {
   virtual bool write32(uint8_t* addr, uint32_t word) = 0;
 };
 
+// Reads the 32-bit instruction at library offset `off`; returns false if that memory is not readable.
+using ReadWord = std::function<bool(uint64_t off, uint32_t& word)>;
+
 // "" = ok, otherwise a human-readable reason why we must not patch.
-std::string verify(const uint8_t* base, uint64_t mappedSize, const Table& t);
+std::string verify(const ReadWord& read, const Table& t);
+std::string verify(const uint8_t* base, uint64_t mappedSize, const Table& t);  // plain-pointer version (tests)
 // Patches every site to the values in `cfg` (values are clamped to the allowed range).
 // Returns the number of sites written; `log` receives one line per site.
 int apply(uint8_t* base, const Config& cfg, const Table& t, Writer& w, std::vector<std::string>& log);

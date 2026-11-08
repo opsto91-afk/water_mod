@@ -2,7 +2,7 @@
   "type": "preload-native",
   "name": "Water Tweaks",
   "author": "you",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "entry": "libwater_mod.so",
   "minecraft_versions": [],
   "overwrite_files": [],

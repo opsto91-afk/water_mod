@@ -38,7 +38,8 @@ std::string defaultConfigText() {
          "water_delay=5\n"
          "lava_delay_overworld=30\n"
          "lava_delay_nether=10\n"
-         "infinite_source_count=2\n";
+         "infinite_source_count=2\n"
+         "dry_run=0   # 1 = only check + log, never write memory\n";
 }
 
 bool parseConfig(const std::string& text, Config& out, std::vector<std::string>& warnings) {
@@ -66,6 +67,7 @@ bool parseConfig(const std::string& text, Config& out, std::vector<std::string>&
     else if (key == "lava_delay_overworld") out.lavaDelayOverworld = (uint32_t)v;
     else if (key == "lava_delay_nether") out.lavaDelayNether = (uint32_t)v;
     else if (key == "infinite_source_count") out.sourceCount = (uint32_t)v;
+    else if (key == "dry_run") out.dryRun = (v != 0);
     else {
       warnings.push_back("unknown key: " + key);
       continue;
@@ -107,16 +109,19 @@ const Table& defaultTable() {
   return t;
 }
 
-std::string verify(const uint8_t* base, uint64_t mappedSize, const Table& t) {
-  auto inRange = [&](uint64_t off) { return off + 4 <= mappedSize; };
+std::string verify(const ReadWord& read, const Table& t) {
+  auto check = [&](uint64_t off, uint32_t& w) -> std::string {
+    if (!read(off, w)) return "offset " + hex(off) + " is not readable (library not fully mapped?)";
+    return "";
+  };
   for (const auto& g : t.guards) {
-    if (!inRange(g.offset)) return "offset " + hex(g.offset) + " is outside the mapped library";
-    uint32_t w = readWord(base + g.offset);
+    uint32_t w = 0;
+    if (auto e = check(g.offset, w); !e.empty()) return e;
     if (w != g.expected) return "guard mismatch at " + hex(g.offset) + " (found " + hex(w) + ") - different Minecraft version";
   }
   for (const auto& p : t.patches) {
-    if (!inRange(p.offset)) return "offset " + hex(p.offset) + " is outside the mapped library";
-    uint32_t w = readWord(base + p.offset);
+    uint32_t w = 0;
+    if (auto e = check(p.offset, w); !e.empty()) return e;
     bool vanilla = (w == p.original);
     // already patched by us earlier (module toggled off/on) is fine: same instruction kind and register
     uint32_t mask = p.kind == Kind::MovzW ? 0xFF80001Fu : 0xFFC003FFu;
@@ -124,6 +129,16 @@ std::string verify(const uint8_t* base, uint64_t mappedSize, const Table& t) {
     if (!vanilla && !ours) return std::string("unexpected instruction at ") + hex(p.offset) + " for " + p.name + " (found " + hex(w) + ")";
   }
   return "";
+}
+
+std::string verify(const uint8_t* base, uint64_t mappedSize, const Table& t) {
+  return verify(
+      [&](uint64_t off, uint32_t& w) {
+        if (off + 4 > mappedSize) return false;
+        w = readWord(base + off);
+        return true;
+      },
+      t);
 }
 
 int apply(uint8_t* base, const Config& cfg, const Table& t, Writer& w, std::vector<std::string>& log) {
