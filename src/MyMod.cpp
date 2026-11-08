@@ -1,6 +1,9 @@
-// MyMod.cpp - "Water Tweaks" v0.2  (LeviLauncher native mod, Preloader SDK `pl::` API)
+// MyMod.cpp - "Water Tweaks" v0.3  (LeviLauncher native mod, Preloader SDK `pl::` API)
 //
 //   Mod Menu -> "Water Tweaks": toggle + sliders (water delay, lava delay x2, source count) + dry-run toggle.
+//   * The module is registered directly in enable(), the same way the reference full-cpp-mod does.
+//     (The 0.3 s deferral in v0.2.1 did not fix anything - see CMakeLists.txt for the ABI mismatch
+//     that was actually killing the game at UI load time.)
 //   * Patching is done by ONE worker thread, never inside a menu callback.
 //   * It waits for libminecraftpe.so + 8 s of settle time, verifies the instructions, then writes them
 //     with the SDK's pl::memory::writeBytes.
@@ -44,7 +47,6 @@ namespace fs = std::filesystem;
 using Clock = std::chrono::steady_clock;
 
 constexpr const char* kModuleId = "water_tweaks";
-constexpr const char* kModId = "water_mod";
 constexpr const char* kLibName = "libminecraftpe.so";
 constexpr const char* kKurumiLog = "/storage/emulated/0/Android/media/org.levimc.launcher/kurumi/water_mod.log";
 constexpr auto kSettle = std::chrono::seconds(8);    // after the library shows up, wait before touching it
@@ -184,10 +186,7 @@ class WaterMod {
   }
 
   WaterMod() : mSelf(*ll::mod::NativeMod::current()) {}
-  ~WaterMod() {
-    stopRegistration();
-    stopWorker();
-  }
+  ~WaterMod() { stopWorker(); }
 
   [[nodiscard]] ll::mod::NativeMod& getSelf() const { return mSelf; }
 
@@ -203,7 +202,7 @@ class WaterMod {
     crash::install();
     { LibMap l; if (findLib(l)) crash::setLib(l.base, l.size); }
     crash::setStage("load");
-    flog("---- load  (v0.2.1)  data dir: " + mDir.string() + "  log: " + mLogPath);
+    flog("---- load  (v0.3.0)  data dir: " + mDir.string() + "  log: " + mLogPath);
 
     if (!fs::exists(mCfgFile, ec)) {
       std::ofstream out(mCfgFile);
@@ -221,23 +220,38 @@ class WaterMod {
   }
 
   bool enable() {
-    crash::setStage("enable: scheduling Mod Menu registration");
-    flog("enable: Mod Menu registration scheduled after 3 seconds");
-    startRegistration();
+    crash::setStage("enable: registering Mod Menu module");
+    const wp::Config c = snapshotCfg();
+    const bool ok =
+        pl::modmenu::ModuleBuilder(kModuleId, "Water Tweaks")
+            .modId(mSelf.getId())
+            .description("Water/lava speed + infinite-source rule. Log: kurumi/water_mod.log")
+            .defaultEnabled(false)
+            .onToggle([](std::string_view, bool on) { WaterMod::instance().onToggle(on); })
+            .onConfigChanged([](std::string_view, std::string_view key, std::string_view value) {
+              WaterMod::instance().onConfig(key, value);
+            })
+            .config("water_delay", "Water delay (ticks, vanilla 5)", pl::modmenu::ConfigType::SliderInt,
+                    std::to_string(c.waterDelay), "1", "40")
+            .config("lava_overworld", "Lava delay overworld (vanilla 30)", pl::modmenu::ConfigType::SliderInt,
+                    std::to_string(c.lavaDelayOverworld), "1", "120")
+            .config("lava_nether", "Lava delay nether (vanilla 10)", pl::modmenu::ConfigType::SliderInt,
+                    std::to_string(c.lavaDelayNether), "1", "60")
+            .config("source_count", "Sources for infinite water (vanilla 2)", pl::modmenu::ConfigType::SliderInt,
+                    std::to_string(c.sourceCount), "1", "4")
+            .config("dry_run", "Dry run (log only, no memory writes)", pl::modmenu::ConfigType::Toggle,
+                    c.dryRun ? "true" : "false")
+            .registerModule();
+    mMenuRegistered.store(ok);
+    crash::setStage("enable done");
+    flog(ok ? "enable: module registered" : "enable: Mod Menu registration FAILED");
     startWorker();
     return true;
   }
 
   bool disable() {
     flog("disable");
-    stopRegistration();
-    {
-      std::lock_guard<std::mutex> lk(mRegistrationMu);
-      if (mMenuRegistered) {
-        pl::modmenu::unregisterModule(kModuleId);
-        mMenuRegistered = false;
-      }
-    }
+    if (mMenuRegistered.exchange(false)) pl::modmenu::unregisterModule(kModuleId);
     stopWorker();
     restoreNow();
     return true;
@@ -248,57 +262,6 @@ class WaterMod {
   }
 
  private:
-  void startRegistration() {
-    stopRegistration();
-    {
-      std::lock_guard<std::mutex> lk(mRegistrationMu);
-      mRegistrationStop = false;
-    }
-    mRegistrationThread = std::thread([this] {
-      std::unique_lock<std::mutex> lk(mRegistrationMu);
-      if (mRegistrationCv.wait_for(lk, std::chrono::seconds(3),
-                                   [this] { return mRegistrationStop; })) {
-        return;
-      }
-
-      crash::setStage("registering Mod Menu module");
-      const wp::Config c = snapshotCfg();
-      const bool ok =
-          pl::modmenu::ModuleBuilder(kModuleId, "Water Tweaks")
-              .modId(kModId)
-              .description("Water/lava speed + infinite-source rule. Log: kurumi/water_mod.log")
-              .defaultEnabled(false)
-              .onToggle([](std::string_view, bool on) { WaterMod::instance().onToggle(on); })
-              .onConfigChanged([](std::string_view, std::string_view key, std::string_view value) {
-                WaterMod::instance().onConfig(key, value);
-              })
-              .config("water_delay", "Water delay (ticks, vanilla 5)", pl::modmenu::ConfigType::SliderInt,
-                      std::to_string(c.waterDelay), "1", "40")
-              .config("lava_overworld", "Lava delay overworld (vanilla 30)", pl::modmenu::ConfigType::SliderInt,
-                      std::to_string(c.lavaDelayOverworld), "1", "120")
-              .config("lava_nether", "Lava delay nether (vanilla 10)", pl::modmenu::ConfigType::SliderInt,
-                      std::to_string(c.lavaDelayNether), "1", "60")
-              .config("source_count", "Sources for infinite water (vanilla 2)", pl::modmenu::ConfigType::SliderInt,
-                      std::to_string(c.sourceCount), "1", "4")
-              .config("dry_run", "Dry run (log only, no memory writes)", pl::modmenu::ConfigType::Toggle,
-                      c.dryRun ? "true" : "false")
-              .registerModule();
-      mMenuRegistered = ok;
-      crash::setStage("Mod Menu registration complete");
-      lk.unlock();
-      flog(ok ? "enable: module registered" : "enable: Mod Menu registration FAILED");
-    });
-  }
-
-  void stopRegistration() {
-    {
-      std::lock_guard<std::mutex> lk(mRegistrationMu);
-      mRegistrationStop = true;
-    }
-    mRegistrationCv.notify_all();
-    if (mRegistrationThread.joinable()) mRegistrationThread.join();
-  }
-
   // ---- logging (flushed every line so a crash leaves a trail) ----
   void openLog() {
     std::error_code ec;
@@ -529,13 +492,13 @@ class WaterMod {
   fs::path mDir, mCfgFile, mArmedFlag, mDisabledFlag;
   int mLogFd = -1;
   std::string mLogPath;
-  std::mutex mLogMu, mMu, mApplyMu, mRegistrationMu;
-  std::condition_variable mCv, mRegistrationCv;
-  std::thread mThread, mRegistrationThread;
+  std::mutex mLogMu, mMu, mApplyMu;
+  std::condition_variable mCv;
+  std::thread mThread;
   // guarded by mMu
   wp::Config mCfg;
   bool mWanted = false, mDirty = false, mStop = false, mBad = false;
-  bool mRegistrationStop = false, mMenuRegistered = false;
+  std::atomic<bool> mMenuRegistered{false};
   Clock::time_point mLastChange{}, mArmedAt{};
   // worker-thread only
   Clock::time_point mLibSeenAt{};
