@@ -7,8 +7,15 @@ instructions in `libminecraftpe.so` (found with Zaphkiel in the main liquid tick
     python3 tools/check_so.py /path/to/libminecraftpe.so     # every line must say OK
 
 ## Build
-Same as the V3 cine mod: push to GitHub -> Actions -> artifact `water_mod`, or
-`ANDROID_NDK_HOME=... ./build.sh`. Import `dist/water_mod.levipack` in LeviLauncher.
+Run the repository's [Water Mod Build workflow](.github/workflows/build.yml) from GitHub
+Actions (or push a change). After it succeeds, download the `water_mod`
+artifact and import `water_mod.levipack` in LeviLauncher.
+
+To build locally, install the Android NDK and run:
+
+    ANDROID_NDK_HOME=/path/to/ndk ./build.sh
+
+The script writes `dist/water_mod.levipack` and the unpacked mod folder to `dist/`.
 
 ## Use
 1. Start the game once, edit `water.cfg` in the mod's data folder (created on first load):
@@ -16,7 +23,8 @@ Same as the V3 cine mod: push to GitHub -> Actions -> artifact `water_mod`, or
        lava_delay_overworld=30  # vanilla 30
        lava_delay_nether=10     # vanilla 10
        infinite_source_count=2  # vanilla 2          (1..8)
-2. Mod Menu -> "Water Tweaks" -> ON. Edit the file -> OFF, ON to re-apply.
+2. The Mod Menu module registers about 3 seconds after the mod is enabled. Then choose
+   "Water Tweaks" -> ON. Edit the file -> OFF, ON to re-apply.
 3. The mod log tells what happened ("patched 5 instruction(s)", or "NOT patching: ...").
 
 ## Safety
@@ -29,6 +37,6 @@ Same as the V3 cine mod: push to GitHub -> Actions -> artifact `water_mod`, or
 `make -C tests run` (pure patch logic, runs on any PC).
 
 ## Not verified yet
-* Never compiled against the real Preloader SDK or run on a phone (syntax-checked against stubs only).
+* The startup crash fix has not yet been verified on a phone.
 * `mprotect` on the game's code pages may be refused on some devices.
 * Offsets are for ONE Minecraft build. A signature scan is the next step to survive updates.

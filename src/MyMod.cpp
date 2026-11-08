@@ -28,7 +28,8 @@
 
 namespace {
 
-constexpr const char* kModuleId = "water_mod.tweaks";
+constexpr const char* kModuleId = "water_tweaks";
+constexpr const char* kModId = "water_mod";
 constexpr const char* kLibName = "libminecraftpe.so";
 
 struct LibMap {
@@ -102,26 +103,46 @@ class WaterMod {
   }
 
   bool enable() {
-    const bool ok = pl::modmenu::ModuleBuilder(kModuleId, "Water Tweaks")
-                        .modId(mSelf.getId())
-                        .description("Water/lava tick delay and infinite-source rule. Edit water.cfg, toggle OFF/ON to apply.")
-                        .defaultEnabled(false)
-                        .onToggle([](std::string_view, bool enabled) { WaterMod::instance().setActive(enabled); })
-                        .registerModule();
-    if (!ok) mSelf.getLogger().warn("Mod Menu module registration failed");
-    mSelf.getLogger().info("{}", std::string("Water Tweaks enabled - switch the module ON in the Mod Menu"));
+    const int generation = ++mRegistrationGeneration;
+    std::thread([this, generation] {
+      std::this_thread::sleep_for(std::chrono::seconds(3));
+      registerMenuModule(generation);
+    }).detach();
+    mSelf.getLogger().info("{}", std::string("Water Tweaks enabled - Mod Menu registration scheduled"));
     return true;
   }
 
   bool disable() {
+    ++mRegistrationGeneration;
     setActive(false);
-    pl::modmenu::unregisterModule(kModuleId);
+    std::lock_guard<std::mutex> lock(mRegistrationMutex);
+    if (mMenuRegistered) {
+      pl::modmenu::unregisterModule(kModuleId);
+      mMenuRegistered = false;
+    }
     return true;
   }
 
-  bool unload() { return true; }
+  bool unload() { return disable(); }
 
  private:
+  void registerMenuModule(int generation) {
+    std::lock_guard<std::mutex> lock(mRegistrationMutex);
+    if (mRegistrationGeneration.load() != generation || mMenuRegistered) return;
+
+    const bool ok = pl::modmenu::ModuleBuilder(kModuleId, "Water Tweaks")
+                        .modId(kModId)
+                        .description("Water/lava tick delay and infinite-source rule. Edit water.cfg, toggle OFF/ON to apply.")
+                        .defaultEnabled(false)
+                        .onToggle([](std::string_view, bool enabled) { WaterMod::instance().setActive(enabled); })
+                        .registerModule();
+    if (!ok) {
+      mSelf.getLogger().warn("Mod Menu module registration failed");
+      return;
+    }
+    mMenuRegistered = true;
+  }
+
   void log(const std::string& s) { mSelf.getLogger().info("{}", s); }
 
   wp::Config readConfig() {
@@ -183,6 +204,9 @@ class WaterMod {
   ll::mod::NativeMod& mSelf;
   std::filesystem::path mCfgFile;
   std::atomic<int> mGen{0};
+  std::atomic<int> mRegistrationGeneration{0};
+  std::mutex mRegistrationMutex;
+  bool mMenuRegistered = false;
   std::mutex mMu;
   bool mApplied = false;
 };

@@ -1,25 +1,41 @@
-# push this project to a repo -> Actions tab -> "build" -> download the artifact.
-name: build
+name: Water Mod Build
+
 on:
   push:
   workflow_dispatch:
+
+permissions:
+  contents: read
+
 jobs:
-  android:
+  host-tests:
+    name: Host patch tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build arm64-v8a
+      - name: Run patch tests
+        run: make -C tests run
+
+  android:
+    name: Build arm64 LeviLauncher package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
         run: |
-          sudo apt-get install -y zip cmake
-          ./build.sh
-        env:
-          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_LATEST_HOME }}
-      - uses: actions/upload-artifact@v4
+          sudo apt-get update
+          sudo apt-get install -y cmake zip
+      - name: Set up Android SDK and NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "ndk;27.2.12479018"
+      - name: Configure NDK path
+        run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - name: Build water_mod.levipack
+        run: ./build.sh
+      - name: Upload LeviLauncher package
+        uses: actions/upload-artifact@v4
         with:
           name: water_mod
-          path: dist/
-  host-test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - run: make -C tests run
+          path: dist/water_mod.levipack
+          if-no-files-found: error
