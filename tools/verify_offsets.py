@@ -9,11 +9,17 @@ the patch table claims (mov w26,#5 / mov w8,#30 / ...).
 
 Usage:
     python3 tools/verify_offsets.py /path/to/libminecraftpe.so [--context 12]
+    python3 tools/verify_offsets.py /path/to/slice.bin --raw [--raw-base 0x1088d000] [--context 12]
+
+--raw treats the file as a flat binary dump of the range starting at --raw-base
+(default 0). Use it when only a few KB around the patch sites are available
+(e.g. dd if=libminecraftpe.so of=slice.bin bs=4096 skip=$((0x1088d000/4096)) count=1).
 
 Exit code 0 = every guard + patch site matches; non-zero = mismatch / not mapped.
 Needs: pip install capstone pyelftools
 """
 import argparse
+import os
 import struct
 import sys
 
@@ -74,7 +80,28 @@ def main():
     ap.add_argument("so")
     ap.add_argument("--context", type=int, default=8,
                     help="instructions of context to print before/after each site (default 8)")
+    ap.add_argument("--raw", action="store_true",
+                    help="file is a flat binary dump (no ELF parsing); use with --raw-base")
+    ap.add_argument("--raw-base", type=lambda x: int(x, 0), default=0,
+                    help="vaddr of the first byte in the raw dump (default 0)")
     args = ap.parse_args()
+
+    md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
+    md.detail = False
+
+    if args.raw:
+        raw_base = args.raw_base
+        raw_size = os.path.getsize(args.so)
+        print("RAW: %s | size=0x%x | base=0x%x  (flat dump, no ELF checks)" % (args.so, raw_size, raw_base))
+        segs = [(raw_base, raw_base + raw_size, 0, "R-X?", True)]
+        # synthetic map: vaddr -> offset = vaddr - raw_base
+        def raw_vaddr_to_fileoff(segs_, vaddr, size):
+            off = vaddr - raw_base
+            if off < 0 or off + size > raw_size:
+                return None, None, None
+            return off, "R-X?", True
+        run_sites(args, segs, read_at, raw_vaddr_to_fileoff, md)
+        return
 
     with open(args.so, "rb") as f:
         elf = ELFFile(f)
@@ -93,21 +120,27 @@ def main():
             lo, hi, off, flags, exe, (hi - lo) / 1048576.0))
     print("first PT_LOAD vaddr = 0x%x  (the mod assumes this is 0)" % first_load)
     if first_load != 0:
-        print("!! WARNING: first LOAD segment does not start at vaddr 0 -- the mod's \'\'base + Zaphkiel offset\'\' assumption is WRONG for this file.")
-        print("   Use vaddr (not file offset) mapping and adjust, or the mod WILL patch the wrong addresses.")
+        print("!! WARNING: first LOAD segment does not start at vaddr 0 -- the mod's base+offset assumption is WRONG for this file.")
+        print("   The mod would patch the wrong addresses. Use vaddr-based mapping.")
 
-    md = Cs(CS_ARCH_ARM64, CS_MODE_ARM)
-    md.detail = False
+    run_sites(args, segs, read_at, vaddr_to_fileoff, md)
+
+
+def run_sites(args, segs, read_at, vaddr_to_fileoff, md):
 
     all_ok = True
     for name, want_vaddr, want_word in SITES:
         foff, flags, exe = vaddr_to_fileoff(segs, want_vaddr, 4)
         print("\n--- %s @ 0x%x" % (name, want_vaddr))
         if foff is None:
-            print("  FAIL: vaddr not covered by any PT_LOAD segment (or range crosses a segment boundary)")
+            print("  FAIL: vaddr not covered (raw file too small / wrong --raw-base?)")
             all_ok = False
             continue
         raw = read_at(args.so, foff, 4)
+        if len(raw) != 4:
+            print("  FAIL: short read")
+            all_ok = False
+            continue
         got = struct.unpack("<I", raw)[0]
         ok = got == want_word
         all_ok &= ok
@@ -118,10 +151,8 @@ def main():
         if not exe:
             print("  !! site is NOT in an executable segment")
             all_ok = False
-        # disassembly of the site itself
         for ins in md.disasm(raw, want_vaddr):
             print("  insn        : 0x%x:\t%s\t%s" % (ins.address, ins.mnemonic, ins.op_str))
-        # context window
         ctx = args.context
         start = max(0, want_vaddr - 4 * ctx)
         size = 4 * (2 * ctx + 1)
@@ -136,9 +167,9 @@ def main():
     print("\n=========================================")
     if all_ok:
         print("ALL OK - this build matches the patch table.")
-        return 0
+        sys.exit(0)
     print("MISMATCH - different Minecraft build or wrong binary; do not use these offsets.")
-    return 1
+    sys.exit(1)
 
 
 if __name__ == "__main__":
