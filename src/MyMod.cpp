@@ -9,7 +9,10 @@
 //     delete water_mod.disabled.
 //   * Every step is appended (and fsync'ed) to  .../org.levimc.launcher/kurumi/water_mod.log
 //     (fallback: the mod's data dir) so a crash still leaves a trail.
+#include <dlfcn.h>
 #include <fcntl.h>
+#include <signal.h>
+#include <ucontext.h>
 #include <unistd.h>
 
 #include <atomic>
@@ -46,6 +49,73 @@ constexpr const char* kLibName = "libminecraftpe.so";
 constexpr const char* kKurumiLog = "/storage/emulated/0/Android/media/org.levimc.launcher/kurumi/water_mod.log";
 constexpr auto kSettle = std::chrono::seconds(8);    // after the library shows up, wait before touching it
 constexpr auto kSurvive = std::chrono::seconds(10);  // alive this long after patching => not a crash
+
+
+// ---- crash tracer -------------------------------------------------------------------------------
+// On SIGSEGV/SIGBUS/SIGILL/SIGABRT/SIGFPE: write signal, fault address, pc, lr and the "stage" we were in
+// to water_mod.log (module + offset for libminecraftpe.so and for this mod), then hand the signal back to the
+// previous handler (Android's own crash reporter) so the game still dies exactly as before.
+namespace crash {
+
+int g_fd = -1;
+std::atomic<uintptr_t> g_mcBase{0}, g_mcEnd{0};
+uintptr_t g_selfBase = 0;
+char g_stage[128] = "init";
+struct sigaction g_old[NSIG];
+const int kSigs[] = {SIGSEGV, SIGBUS, SIGILL, SIGABRT, SIGFPE};
+
+void setStage(const char* s) {
+  std::strncpy(g_stage, s, sizeof g_stage - 1);
+  g_stage[sizeof g_stage - 1] = 0;
+}
+
+void put(const char* s) { if (g_fd >= 0) (void)!::write(g_fd, s, std::strlen(s)); }
+void putHex(uint64_t v) {
+  char b[19] = "0x0000000000000000";
+  for (int i = 17; i >= 2; --i, v >>= 4) b[i] = "0123456789abcdef"[v & 0xF];
+  put(b);
+}
+void putAddr(uint64_t a) {
+  putHex(a);
+  const uintptr_t lo = g_mcBase.load(), hi = g_mcEnd.load();
+  if (lo && a >= lo && a < hi) { put(" [libminecraftpe.so+"); putHex(a - lo); put("]"); }
+  else if (g_selfBase && a >= g_selfBase && a - g_selfBase < 0x1000000) { put(" [water_mod.so+"); putHex(a - g_selfBase); put("]"); }
+}
+
+void handler(int sig, siginfo_t* si, void* uc) {
+  put("\n*** CRASH signal="); putHex((uint64_t)sig);
+  put(" code="); putHex((uint64_t)si->si_code);
+  put(" fault_addr="); putAddr((uint64_t)si->si_addr);
+#if defined(__aarch64__)
+  auto* c = static_cast<ucontext_t*>(uc);
+  put("\n    pc="); putAddr(c->uc_mcontext.pc);
+  put("\n    lr="); putAddr(c->uc_mcontext.regs[30]);
+  put("\n    sp="); putHex(c->uc_mcontext.sp);
+#else
+  (void)uc;
+#endif
+  put("\n    stage="); put(g_stage); put("\n");
+  if (g_fd >= 0) ::fsync(g_fd);
+  if (sig > 0 && sig < NSIG) sigaction(sig, &g_old[sig], nullptr);  // old handler gets the fault again
+}
+
+void setFd(int fd) { g_fd = fd; }
+void setLib(uintptr_t base, uint64_t size) { g_mcBase = base; g_mcEnd = base + size; }
+
+void install() {
+  static bool done = false;
+  if (done) return;
+  done = true;
+  Dl_info info{};
+  if (dladdr(reinterpret_cast<void*>(&install), &info) && info.dli_fbase) g_selfBase = (uintptr_t)info.dli_fbase;
+  struct sigaction sa{};
+  sa.sa_sigaction = handler;
+  sigemptyset(&sa.sa_mask);
+  sa.sa_flags = SA_SIGINFO | SA_NODEFER;
+  for (int sig : kSigs) sigaction(sig, &sa, &g_old[sig]);
+}
+
+}  // namespace crash
 
 struct LibMap {
   uintptr_t base = 0;
@@ -87,6 +157,9 @@ struct SdkWriter : wp::Writer {
     std::memcpy(b, &word, 4);
     char name[64];
     std::snprintf(name, sizeof name, "water_mod.site.%p", static_cast<void*>(addr));
+    char st[96];
+    std::snprintf(st, sizeof st, "writing patch @%p", static_cast<void*>(addr));
+    crash::setStage(st);
     return pl::memory::writeBytes(reinterpret_cast<uintptr_t>(addr), std::span<const uint8_t>(b, 4), name);
   }
 };
@@ -114,7 +187,6 @@ class WaterMod {
   ~WaterMod() {
     stopRegistration();
     stopWorker();
-    if (mLogFd >= 0) ::close(mLogFd);
   }
 
   [[nodiscard]] ll::mod::NativeMod& getSelf() const { return mSelf; }
@@ -127,7 +199,11 @@ class WaterMod {
     mArmedFlag = mDir / "water_mod.armed";
     mDisabledFlag = mDir / "water_mod.disabled";
     openLog();
-    flog("---- load  (v0.2)  data dir: " + mDir.string());
+    crash::setFd(mLogFd);
+    crash::install();
+    { LibMap l; if (findLib(l)) crash::setLib(l.base, l.size); }
+    crash::setStage("load");
+    flog("---- load  (v0.2.1)  data dir: " + mDir.string() + "  log: " + mLogPath);
 
     if (!fs::exists(mCfgFile, ec)) {
       std::ofstream out(mCfgFile);
@@ -145,6 +221,7 @@ class WaterMod {
   }
 
   bool enable() {
+    crash::setStage("enable: scheduling Mod Menu registration");
     flog("enable: Mod Menu registration scheduled after 3 seconds");
     startRegistration();
     startWorker();
@@ -184,6 +261,7 @@ class WaterMod {
         return;
       }
 
+      crash::setStage("registering Mod Menu module");
       const wp::Config c = snapshotCfg();
       const bool ok =
           pl::modmenu::ModuleBuilder(kModuleId, "Water Tweaks")
@@ -206,6 +284,7 @@ class WaterMod {
                       c.dryRun ? "true" : "false")
               .registerModule();
       mMenuRegistered = ok;
+      crash::setStage("Mod Menu registration complete");
       lk.unlock();
       flog(ok ? "enable: module registered" : "enable: Mod Menu registration FAILED");
     });
@@ -383,6 +462,8 @@ class WaterMod {
     if (Clock::now() - mLibSeenAt < kSettle) return true;
 
     const uintptr_t base = lib.base;
+    crash::setLib(lib.base, lib.size);
+    crash::setStage("verify");
     const std::string why = wp::verify(
         [base](uint64_t off, uint32_t& w) {
           auto v = pl::memory::readBytes(base + off, 4);  // SDK checks that the range is mapped + readable
@@ -414,10 +495,12 @@ class WaterMod {
     }
     SdkWriter w;
     std::vector<std::string> lines;
+    crash::setStage("before writing patches");
     flog("writing patches ...");
     const int n = wp::apply(reinterpret_cast<uint8_t*>(base), cfg, wp::defaultTable(), w, lines);
     for (const auto& l : lines) flog("  " + l);
     mApplied = n > 0;
+    crash::setStage("patched, running");
     flog("patched " + std::to_string(n) + " instruction(s)");
     return false;
   }
