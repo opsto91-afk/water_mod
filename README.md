@@ -25,8 +25,8 @@ Mod Menu -> "Water Tweaks": toggle + sliders (water delay, lava delay overworld 
 2. Dry run OFF -> log says `writing patches ...` and `patched 5 instruction(s)`.
 3. Open `Android/media/org.levimc.launcher/kurumi/water_mod.log` - every step is flushed to disk, so even after a
    crash the last line shows how far it got. (Preloader's own log goes to Android logcat, not to the launcher.)
-3b. Crash tracer: on SIGSEGV/SIGBUS/SIGILL/SIGABRT/SIGFPE the log gets a `*** CRASH` block with fault address,
-   pc and lr as `libminecraftpe.so+0x...` / `water_mod.so+0x...` and the `stage` we were in. Send that block.
+3b. This test build leaves Android's crash handlers untouched. If startup crashes, collect the Android
+   tombstone/logcat rather than looking for a custom `*** CRASH` block in the mod log.
 4. If the previous run died after patching, the next start logs `SAFE MODE` and writes nothing until you delete
    `water_mod.disabled` in the mod's data dir.
 
@@ -48,8 +48,13 @@ Mod Menu -> "Water Tweaks": toggle + sliders (water delay, lava delay overworld 
 ## Tests
 `make -C tests run` (pure patch logic, runs on any PC).
 
+## Crash-isolation test build
+The worker thread is temporarily disabled in `enable()` to check whether delayed Mod Menu registration
+alone triggers the startup crash. No memory patches will be attempted in this build. Once registration
+is confirmed stable on a phone, re-enable the worker and test patching separately.
+
 ## Not verified yet
-* The package compiles against the Preloader SDK, but the delayed registration and crash tracer still need
+* The package compiles against the Preloader SDK, but delayed registration and patching still need
   verification on a phone.
 * `mprotect` on the game's code pages may be refused on some devices.
 * Offsets are for ONE Minecraft build. A signature scan is the next step to survive updates.

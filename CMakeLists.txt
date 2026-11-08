@@ -18,7 +18,7 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(preloader_android)
 
 add_library(water_mod SHARED src/MyMod.cpp src/WaterPatch.cpp)
-target_include_directories(water_mod PRIVATE src)
+target_include_directories(water_mod PRIVATE src "${preloader_android_SOURCE_DIR}/src")
 set_target_properties(water_mod PROPERTIES
   CXX_VISIBILITY_PRESET hidden
   VISIBILITY_INLINES_HIDDEN ON
