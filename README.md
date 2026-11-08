@@ -49,6 +49,7 @@ Mod Menu -> "Water Tweaks": toggle + sliders (water delay, lava delay overworld 
 `make -C tests run` (pure patch logic, runs on any PC).
 
 ## Not verified yet
-* Never compiled against the real Preloader SDK or run on a phone (syntax-checked against stubs only).
+* The package compiles against the Preloader SDK, but the delayed registration and crash tracer still need
+  verification on a phone.
 * `mprotect` on the game's code pages may be refused on some devices.
 * Offsets are for ONE Minecraft build. A signature scan is the next step to survive updates.
