@@ -17,10 +17,13 @@ cmake -S . -B build \
 cmake --build build -j"$(nproc 2>/dev/null || echo 4)"
 
 # The folder name is the runtime mod id - keep it stable.
-rm -rf dist && mkdir -p dist/water_mod
+rm -rf dist && mkdir -p dist/water_mod dist/infinite_flow
 cp build/libwater_mod.so manifest.json dist/water_mod/
-( cd dist && zip -qr water_mod.levipack water_mod )
+cp build/libinfinite_flow.so variants/flow-infinite/manifest.json dist/infinite_flow/
+( cd dist && zip -qr water_mod.levipack water_mod && zip -qr infinite_flow.levipack infinite_flow )
 echo
 echo "Done:"
 echo "  dist/water_mod/            (unpacked mod folder)"
 echo "  dist/water_mod.levipack    (zip of that folder, for import in LeviLauncher)"
+echo "  dist/infinite_flow/        (unpacked mod folder)"
+echo "  dist/infinite_flow.levipack (Infinite Flow variant, for import in LeviLauncher)"

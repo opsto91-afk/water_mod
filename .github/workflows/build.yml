@@ -31,11 +31,17 @@ jobs:
           packages: "ndk;27.2.12479018"
       - name: Configure NDK path
         run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
-      - name: Build water_mod.levipack
+      - name: Build water_mod.levipack and infinite_flow.levipack
         run: ./build.sh
       - name: Upload LeviLauncher package
         uses: actions/upload-artifact@v4
         with:
           name: water_mod
           path: dist/water_mod.levipack
+          if-no-files-found: error
+      - name: Upload Infinite Flow package
+        uses: actions/upload-artifact@v4
+        with:
+          name: infinite_flow
+          path: dist/infinite_flow.levipack
           if-no-files-found: error

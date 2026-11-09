@@ -34,5 +34,15 @@ set_target_properties(water_mod PROPERTIES
   OUTPUT_NAME water_mod)
 target_link_options(water_mod PRIVATE -Wl,--exclude-libs,ALL)
 
+# Infinite Flow variant: water never stops spreading (spread cap removed). EXPERIMENTAL.
+add_library(infinite_flow SHARED variants/flow-infinite/src/InfiniteFlowMod.cpp src/WaterPatch.cpp)
+target_include_directories(infinite_flow PRIVATE src)
+set_target_properties(infinite_flow PROPERTIES
+  CXX_VISIBILITY_PRESET hidden
+  VISIBILITY_INLINES_HIDDEN ON
+  OUTPUT_NAME infinite_flow)
+target_link_options(infinite_flow PRIVATE -Wl,--exclude-libs,ALL)
+
 find_library(log-lib log REQUIRED)
 target_link_libraries(water_mod PRIVATE preloader ${log-lib} dl)
+target_link_libraries(infinite_flow PRIVATE preloader ${log-lib} dl)

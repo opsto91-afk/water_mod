@@ -39,6 +39,16 @@ std::string defaultConfigText() {
          "lava_delay_overworld=30\n"
          "lava_delay_nether=10\n"
          "infinite_source_count=2\n"
+         "spread_limit=15   # Infinite Flow variant only; ignored here\n"
+         "keep_flow_type=1  # Infinite Flow variant only; ignored here\n"
+         "dry_run=0   # 1 = only check + log, never write memory\n";
+}
+
+std::string flowConfigText() {
+  return "# Infinite Flow - edit, then switch the module OFF and ON in the Mod Menu.\n"
+         "# spread_limit: how far water may flow (vanilla 7, max useful 15).\n"
+         "spread_limit=15\n"
+         "keep_flow_type=1   # 1 = distant water stays 'flowing' (default). 0 = vanilla (>7 becomes falling water)\n"
          "dry_run=0   # 1 = only check + log, never write memory\n";
 }
 
@@ -67,6 +77,8 @@ bool parseConfig(const std::string& text, Config& out, std::vector<std::string>&
     else if (key == "lava_delay_overworld") out.lavaDelayOverworld = (uint32_t)v;
     else if (key == "lava_delay_nether") out.lavaDelayNether = (uint32_t)v;
     else if (key == "infinite_source_count") out.sourceCount = (uint32_t)v;
+    else if (key == "spread_limit") out.spreadLimit = (uint32_t)v;
+    else if (key == "keep_flow_type") out.spreadKeepType = (v != 0);
     else if (key == "dry_run") out.dryRun = (v != 0);
     else {
       warnings.push_back("unknown key: " + key);
@@ -82,6 +94,7 @@ uint32_t encodeCmpWImm(uint32_t rn, uint32_t imm12) {
   return 0x7100001Fu | ((imm12 & 0xFFFu) << 10) | ((rn & 0x1Fu) << 5);
 }
 uint32_t encode(const Patch& p, uint32_t value) {
+  if (p.kind == Kind::Fixed) return p.fixed;
   return p.kind == Kind::MovzW ? encodeMovzW(p.reg, value) : encodeCmpWImm(p.reg, value);
 }
 
@@ -109,6 +122,37 @@ const Table& defaultTable() {
   return t;
 }
 
+
+Table flowTable(bool keepFlowType) {
+  // Found with Zaphkiel on the same build as defaultTable() (liquid tick worker at 0x1088d268).
+  // The "stop after 7 blocks" check is duplicated in the copies of the propagation path:
+  //   0x1088d64c  cmp w10, #0x7   (path A: invalidates via csinv -> w24 = -1 sentinel)
+  //   0x1088da80  cmp w25, #0x7   (path B gate 1)
+  //   0x1088da88  cmp w24, #0x7   (path B gate 2)
+  //   0x1088e13c  cmp w24, #0x7   (path C outer guard)
+  //   0x1088e144  cmp w22, #0x7   (path C inner guard, right before the tick-scheduling call)
+  // All five are plain "cmp wN,#7" (verified by roundtrip-encoding through the A64 ISA).
+  // keep_flow_type additionally swaps the block-state packer's "csel w24, w0, w8, gt"
+  // (0x1088d980) with "mov w24, w0" (0x2A0003F8). Vanilla semantics of that csel:
+  //   if (extracted_distance > 7)  w24 = extracted + 8   // re-type as "falling" (bit 3 set)
+  //   else                         w24 = extracted
+  // i.e. the packer actively converts distance>7 water into the falling kind. Disabling it keeps
+  // distant water in the flowing kind so spread_limit can take effect beyond 7.
+  Table t;
+  t.patches = {
+      {"spread_cap (A)", 0x1088d64c, 0x71001D5Fu, Kind::CmpWImm, 10, &Config::spreadLimit, 1, 15, 0},
+      {"spread_cap (B1)", 0x1088da80, 0x71001F3Fu, Kind::CmpWImm, 25, &Config::spreadLimit, 1, 15, 0},
+      {"spread_cap (B2)", 0x1088da88, 0x71001F1Fu, Kind::CmpWImm, 24, &Config::spreadLimit, 1, 15, 0},
+      {"spread_cap (C1)", 0x1088e13c, 0x71001F1Fu, Kind::CmpWImm, 24, &Config::spreadLimit, 1, 15, 0},
+      {"spread_cap (C2)", 0x1088e144, 0x71001EDF, Kind::CmpWImm, 22, &Config::spreadLimit, 1, 15, 0},
+  };
+  if (keepFlowType)
+    t.patches.push_back(
+        {"keep_flow_type", 0x1088d980, 0x1A88C018u, Kind::Fixed, 0, &Config::spreadLimit, 1, 15, 0x2A0003F8u});
+  t.guards = defaultTable().guards;  // same Minecraft build markers as the water patches
+  return t;
+}
+
 std::string verify(const ReadWord& read, const Table& t) {
   auto check = [&](uint64_t off, uint32_t& w) -> std::string {
     if (!read(off, w)) return "offset " + hex(off) + " is not readable (library not fully mapped?)";
@@ -123,9 +167,14 @@ std::string verify(const ReadWord& read, const Table& t) {
     uint32_t w = 0;
     if (auto e = check(p.offset, w); !e.empty()) return e;
     bool vanilla = (w == p.original);
-    // already patched by us earlier (module toggled off/on) is fine: same instruction kind and register
-    uint32_t mask = p.kind == Kind::MovzW ? 0xFF80001Fu : 0xFFC003FFu;
-    bool ours = ((w & mask) == (p.original & mask));
+    bool ours = false;
+    if (p.kind == Kind::Fixed) {
+      ours = (w == p.fixed);  // only our exact word counts as ours
+    } else {
+      // already patched by us earlier (module toggled off/on) is fine: same instruction kind and register
+      uint32_t mask = p.kind == Kind::MovzW ? 0xFF80001Fu : 0xFFC003FFu;
+      ours = ((w & mask) == (p.original & mask));
+    }
     if (!vanilla && !ours) return std::string("unexpected instruction at ") + hex(p.offset) + " for " + p.name + " (found " + hex(w) + ")";
   }
   return "";

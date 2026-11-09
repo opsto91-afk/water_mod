@@ -1,55 +1,62 @@
-# Infinite Flow (variant — offset pending)
+# Infinite Flow (experimental variant)
 
-Standalone variant of **Water Tweaks** whose **only** gameplay change is:
+**One feature, nothing else:** flowing water never stops spreading — the vanilla
+"distance from source ≤ 7" cap is raised to your `spread_limit` (default 15, max 15).
 
-> Water keeps flowing and never stops — the spread distance cap (vanilla ≈ 7 blocks) is removed.
+> Status: EXPERIMENTAL build. Byte offsets verified against one Minecraft build only
+> (the same build the Water Tweaks offsets come from). If the offsets don't match your
+> build, the mod verifies first and refuses to write ANYTHING ("NOT patching: ...").
+> Local / single-player only — liquids tick server-side.
 
-No water-delay / lava-delay / infinite-source changes. No other modules. One purpose.
+## What it patches (all in the liquid tick worker at 0x1088d268)
 
-## Status: NOT buildable yet — one verified offset is missing
+| Site | Vanilla | Patched | Purpose |
+|---|---|---|---|
+| 0x1088d64c | `cmp w10, #7` | `cmp w10, #N` | path A: the invalidating `csinv -> w24 = -1` check |
+| 0x1088da80 | `cmp w25, #7` | `cmp w25, #N` | path B: gate 1 |
+| 0x1088da88 | `cmp w24, #7` | `cmp w24, #N` | path B: gate 2 |
+| 0x1088e13c | `cmp w24, #7` | `cmp w24, #N` | path C: outer guard |
+| 0x1088e144 | `cmp w22, #7` | `cmp w22, #N` | path C: inner guard (before the tick-scheduling call) |
+| 0x1088d980 | `csel w24, w0, w8, gt` | `mov w24, w0` | packer: stops re-typing distance>7 water as "falling" (keep_flow_type=1) |
 
-The water/lava tick patch sites were found by RE of `libminecraftpe.so` (liquid tick worker at
-`0x1088d268`). The "water stops spreading" behaviour is enforced by a small immediate somewhere in
-the same code region (most likely a `cmp`/`subs` against the fluid "level", or a `mov` of the max
-flow distance). **That instruction has not been identified yet** — it cannot be, without looking at
-the actual bytes of your game build. Guessing it and patching blind would corrupt game memory.
+N = `spread_limit` (1..15). Guards = the Water Tweaks build markers (same Minecraft build).
 
-## What must happen before this variant can be built
+## Why 15 is the cap (read this before asking for "4095")
 
-1. Get the game's `libminecraftpe.so` (or a bigger slice than the 4 KB one used for the water sites):
-   ```bash
-   python3 -c "open('slice2.bin','wb').write(open('libminecraftpe.so','rb').read()[0x1088c000:0x1088e200])"
-   ```
-   (~8.8 KB — covers the whole liquid tick worker and the sites we know.)
-2. Run the RE helper:
-   ```bash
-   python3 tools/find_flow_sites.py slice2.bin --raw --raw-base 0x1088c000 --all > flow_report.txt
-   python3 tools/find_flow_sites.py slice2.bin --raw --raw-base 0x1088c000   # flagged-only view
-   ```
-   It lists every `mov`/`cmp`/`sub` with an immediate in 1..16 and anything mentioning 7/8, with addresses.
-3. From the flagged list, pick the instruction that guards the spread (context decides: a `cmp wX,#7`
-   followed by a conditional branch out of the spreading path is the classic shape).
-4. The variant gets a new verified patch table entry (same `Writer`/verify/restore machinery as
-   Water Tweaks — guard bytes around it, dry-run default ON).
-5. CI builds it, imp `infinite_flow.levipack` in LeviLauncher. Done.
+Vanilla fluid distance is 0..7 and **bit 3 (value 8) marks the "falling" fluid kind**.
+The packer instruction `csel w24, w0, w8, gt` at 0x1088d980 actively converts a distance
+above 7 into `distance + 8` — i.e. into the falling kind. That means:
 
-## Design (fixed once the offset is known)
+* raising the `cmp` caps alone only makes distant water **"falling" water**, which does not
+  spread horizontally the way flowing water does;
+* with `keep_flow_type=1` (`mov w24, w0`) that re-typing is disabled and distances 8..15 can
+  remain flowing — but 8..15 re-enters the falling nibble anyway at pack time is avoided only
+  if the packed field is ≥ 4 bits wide beyond the falling bit, which we have NOT verified.
+  15 is therefore the largest value that does not overflow a 4-bit field.
 
-* Own `manifest.json` (`type: preload-native`, name `Infinite Flow`, single `lib`).
-* Own table with exactly ONE patch site + 1–2 guards, default value chosen to match the instruction
-  kind (e.g. raise the cap to a large immediate).
-* Toggle ON/OFF restores vanilla bytes; values clamped; dry-run + Safe-Mode logic reused from water_mod.
-* Local/single-player only (liquid sim is server-side).
+If the game misbehaves past some lower value, set `spread_limit` lower — or toggle the module
+OFF to restore every site to vanilla bytes.
 
-## Known trade-offs (be honest about them)
+## Test protocol (in-game)
 
-* Infinite spread means the liquid sim keeps allocating new flowing blocks for as long as the world
-  ticks — on big builds this can increase server/CPU load.
-* Flowing water past a certain distance will still behave "thin" (level 1) but will not despawn early;
-  visuals will show a long thin trail.
-* Only valid for the exact Minecraft build the site was verified on (same caveat as all Water Tweaks offsets).
+1. Enable **Dry run** first → `infinite_flow.log` must say `verify OK ... DRY RUN`. Nothing is written.
+2. Dry run OFF → `writing patches ...` + `patched 6 instruction(s)` (5 cmp + keep_flow_type).
+3. Flat 16-block trench of source blocks: count how far water spreads. Vanilla = 7.
+4. Toggle module OFF → `restored 6 instruction(s) to vanilla`. Water should behave vanilla again.
+
+## Where the log lives
+
+`Android/media/org.levimc.launcher/kurumi/infinite_flow.log`
+
+## Remaining unknowns
+
+* Whether distances 8..15 are truly accepted by the block-state packer as "flowing" (needs
+  one in-game run with keep_flow_type=1 and spread_limit=15).
+* Whether a future Minecraft build moves any of the six sites (signature scan still pending).
 
 ## Files
 
-* `tools/find_flow_sites.py` — the RE helper (repo root). Everything else in this folder is documentation
-  until the offset is confirmed.
+* `variants/flow-infinite/src/InfiniteFlowMod.cpp` — the module (single feature, full safety machinery)
+* `variants/flow-infinite/manifest.json` — `Infinite Flow` v0.1.0
+* `tools/find_flow_sites.py` — RE helper used to locate the `cmp #7` candidates (repo root)
+* `tools/ghidra/FindSpreadCap.py` — same, as a Ghidra headless postScript
