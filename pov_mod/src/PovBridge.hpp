@@ -1,14 +1,16 @@
 // PovBridge.hpp - game side of the Screen POV mod.
 //
-//   - A watcher thread finds libminecraftpe.so (60.4) and installs two hooks:
-//       UpdatePlayerFromCamera (id 0x8c pattern)  -> AFTER the original: re-apply our quaternion
-//       RenderLevel             (id 0x23 pattern)  -> BEFORE the original: write our eye position
-//     Both writes are mincore()-guarded; the original functions are always called.
-//   - The pose comes from the Mod Menu (pov_yaw / pov_pitch / pos_x / pos_y / pos_z / relative_pos)
-//     multiplied against the player's live eye position when relative mode is on.
-//   - Player identity: the player pointer captured from UpdatePlayerFromCamera (the ClientInstanceUpdate
-//     signature never matched on 60.4). Falls back to a vtable probe if needed.
-//   - Log: kurumi/pov_mod.log (fallback: the mod's data dir). Crash tracer dumps the stage + fault address.
+//   Watcher thread finds libminecraftpe.so (60.4) and installs three hooks:
+//     UpdatePlayerFromCamera (skipped while override ON)  -> the body never syncs from the camera
+//     LocalPlayerApplyTurnDelta (dropped while override ON) -> mouse/touch never drags the view
+//     RenderLevel (wrap-original)                          -> CameraComponent pose injection:
+//        BEFORE orig: entt-registry walk finds the LocalPlayer's own CameraComponent
+//                     (same algorithm as BedrockTools' InputComponent lookup), snapshot it,
+//                     write our yaw/pitch/roll quaternion (+ view_offset when the probe confirms).
+//        AFTER  orig: restore the snapshot byte-for-byte.
+//   A one-time on-device probe discovers the component stride (the unit-quaternion invariant at
+//   +0x28) and logs a full hexdump + all candidate strides to pov_mod.log.
+//   Log: kurumi/pov_mod.log (fallback: the mod's data dir). Crash tracer dumps stage + fault addr.
 #pragma once
 #include <string>
 

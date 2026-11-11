@@ -11,6 +11,7 @@ namespace pov {
 struct Pose {
   float x = 0, y = 64, z = 0;   // world position (eye level)
   float pitch = 0, yaw = 0;     // degrees (Minecraft: pitch + = look down, yaw 0 = south)
+  float roll = 0;               // degrees; + = right wing down (DABR convention)
 };
 
 inline constexpr float kDeg2Rad = 3.14159265358979323846f / 180.f;
@@ -23,20 +24,23 @@ inline Vec3 cross(const Vec3& a, const Vec3& b) {
   return {a.y * b.z - a.z * b.y, a.z * b.x - a.x * b.z, a.x * b.y - a.y * b.x};
 }
 
-// Pose (pitch + = look down, yaw 0 = south) -> MC camera quaternion.
-// forward = (-sin y cos p, -sin p, cos y cos p); right = (-cos y, 0, -sin y);
-// up = right x forward; matrix columns (right, up, -forward) -> quaternion.
-inline Quat quatFromYawPitch(float yawDeg, float pitchDeg) {
-  const float y = yawDeg * kDeg2Rad;
-  const float p = pitchDeg * kDeg2Rad;
-  const float sy = std::sin(y), cy = std::cos(y);
-  const float sp = std::sin(p), cp = std::cos(p);
-  const Vec3 right{-cy, 0.f, -sy};
-  const Vec3 forward{-sy * cp, -sp, cy * cp};
-  const Vec3 up = cross(right, forward);
-  const float m00 = right.x, m01 = up.x, m02 = -forward.x;
-  const float m10 = right.y, m11 = up.y, m12 = -forward.y;
-  const float m20 = right.z, m21 = up.z, m22 = -forward.z;
+// Rodrigues' rotation of v around unit/normal axis k by a (radians).
+inline Vec3 rotateAxis(const Vec3& v, const Vec3& k, float a) {
+  const float c = std::cos(a), s = std::sin(a);
+  const Vec3 kxv = cross(k, v);
+  const float kdotv = k.x * v.x + k.y * v.y + k.z * v.z;
+  return {v.x * c + kxv.x * s + k.x * kdotv * (1.f - c),
+          v.y * c + kxv.y * s + k.y * kdotv * (1.f - c),
+          v.z * c + kxv.z * s + k.z * kdotv * (1.f - c)};
+}
+
+// Rotation matrix from the MC camera basis (yaw/pitch/roll) as GLM-style columns, packed into a
+// quaternion. Layout matches Do-A-Barrel-Roll: forward f = (-sin y cos p, -sin p, cos y cos p),
+// right r = (-cos y, 0, -sin y), up u = r x f, columns (r, u, -f). Roll rotates r and u around f.
+inline Quat quatFromBasis(const Vec3& right, const Vec3& up, const Vec3& negForward) {
+  const float m00 = right.x, m01 = up.x, m02 = negForward.x;
+  const float m10 = right.y, m11 = up.y, m12 = negForward.y;
+  const float m20 = right.z, m21 = up.z, m22 = negForward.z;
   Quat q{};
   const float tr = m00 + m11 + m22;
   if (tr > 0.f) {
@@ -57,10 +61,33 @@ inline Quat quatFromYawPitch(float yawDeg, float pitchDeg) {
   return q;
 }
 
+// Pose (pitch + = look down, yaw 0 = south, roll + = right wing down) -> MC camera quaternion.
+inline Quat quatFromYawPitchRoll(float yawDeg, float pitchDeg, float rollDeg) {
+  const float y = yawDeg * kDeg2Rad;
+  const float p = pitchDeg * kDeg2Rad;
+  const Vec3 right{-std::cos(y), 0.f, -std::sin(y)};
+  const Vec3 forward{-std::sin(y) * std::cos(p), -std::sin(p), std::cos(y) * std::cos(p)};
+  Vec3 up = cross(right, forward);
+  Vec3 r = right;
+  if (rollDeg != 0.f) {
+    const float a = rollDeg * kDeg2Rad;
+    r = rotateAxis(r, forward, a);
+    up = rotateAxis(up, forward, a);
+  }
+  const Vec3 negForward{-forward.x, -forward.y, -forward.z};
+  return quatFromBasis(r, up, negForward);
+}
+
+// Pose (pitch + = look down, yaw 0 = south) -> MC camera quaternion.
+inline Quat quatFromYawPitch(float yawDeg, float pitchDeg) {
+  return quatFromYawPitchRoll(yawDeg, pitchDeg, 0.f);
+}
+
 // The override pose requested from the Mod Menu.
 struct PovRequest {
   float yaw = 0;          // absolute MC yaw the camera should hold (degrees)
   float pitch = 0;        // absolute MC pitch (+ = look down)
+  float roll = 0;         // absolute roll (+ = right wing down)
   float px = 0, py = 0, pz = 0;   // position offset (relative mode) or absolute world position
   bool relativePos = true;        // true: pos sliders are added to the player's eye position
   bool invertYaw = false;         // device-test aid: flip the sign of the applied yaw
@@ -84,6 +111,7 @@ inline Pose computePose(const PovRequest& req, const Pose& playerEye, bool hasPl
   }
   out.yaw = req.invertYaw ? -req.yaw : req.yaw;
   out.pitch = req.invertPitch ? -req.pitch : req.pitch;
+  out.roll = req.roll;  // roll is not flipped (it has its own slider sign convention)
   return out;
 }
 

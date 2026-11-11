@@ -57,6 +57,59 @@ int main() {
     check(near(out.yaw, -45.f) && near(out.pitch, -10.f), "invertPitch flips only pitch");
   }
 
+  std::printf("-- quatFromYawPitchRoll (roll) --\n");
+  {
+    auto len = [](const Quat& q) { return std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w); };
+    // roll=0 must match quatFromYawPitch exactly
+    {
+      const Quat a = quatFromYawPitch(30.f, 15.f);
+      const Quat b = quatFromYawPitchRoll(30.f, 15.f, 0.f);
+      check(near(a.x, b.x) && near(a.y, b.y) && near(a.z, b.z) && near(a.w, b.w), "roll=0 equals quatFromYawPitch");
+    }
+    // unit length across a roll sweep
+    for (float roll : {-120.f, -45.f, 0.f, 45.f, 90.f, 179.f}) {
+      const Quat q = quatFromYawPitchRoll(33.f, -20.f, roll);
+      check(near(len(q), 1.f, 1e-3f), "unit length with roll");
+    }
+    // +90 deg roll (right wing down) rotates the up axis: camera "up" tilts toward world right.
+    // For yaw=0 (looking south), MC right = (-cos0, 0, -sin0) = (-1, 0, 0).
+    // Rotating up (0,1,0) around forward (0,0,1) by +90 (right-hand rule around f) must give
+    // the world right vector of the camera, i.e. the up vec tilts toward camera-right.
+    {
+      const Quat q = quatFromYawPitchRoll(0.f, 0.f, 90.f);
+      auto rotate = [](const Quat& qq, float vx, float vy, float vz, float out[3]) {
+        const float tx = 2.f * (qq.y * vz - qq.z * vy);
+        const float ty = 2.f * (qq.z * vx - qq.x * vz);
+        const float tz = 2.f * (qq.x * vy - qq.y * vx);
+        out[0] = vx + qq.w * tx + qq.y * tz - qq.z * ty;
+        out[1] = vy + qq.w * ty + qq.z * tx - qq.x * tz;
+        out[2] = vz + qq.w * tz + qq.x * ty - qq.y * tx;
+      };
+      float up[3] = {};
+      rotate(q, 0.f, 1.f, 0.f, up);
+      // up should become (+/-1, ~0, ~0): compare magnitude against x (sign depends on convention)
+      char what[128];
+      std::snprintf(what, sizeof what, "90 deg roll tilts up axis sideways (up=%.3f,%.3f,%.3f)", up[0], up[1], up[2]);
+      check(std::fabs(up[0]) > 0.99f && std::fabs(up[1]) < 0.01f && std::fabs(up[2]) < 0.01f, what);
+    }
+    // Roll should not change the forward direction: camera forward == quatFromYawPitch forward.
+    {
+      auto rotate = [](const Quat& qq, float vx, float vy, float vz, float out[3]) {
+        const float tx = 2.f * (qq.y * vz - qq.z * vy);
+        const float ty = 2.f * (qq.z * vx - qq.x * vz);
+        const float tz = 2.f * (qq.x * vy - qq.y * vx);
+        out[0] = vx + qq.w * tx + qq.y * tz - qq.z * ty;
+        out[1] = vy + qq.w * ty + qq.z * tx - qq.x * tz;
+        out[2] = vz + qq.w * tz + qq.x * ty - qq.y * tx;
+      };
+      float a[3], b[3];
+      rotate(quatFromYawPitchRoll(50.f, 12.f, 0.f), 0.f, 0.f, -1.f, a);
+      rotate(quatFromYawPitchRoll(50.f, 12.f, 73.f), 0.f, 0.f, -1.f, b);
+      check(near(a[0], b[0], 1e-4f) && near(a[1], b[1], 1e-4f) && near(a[2], b[2], 1e-4f),
+            "roll preserves forward axis");
+    }
+  }
+
   std::printf("-- quatFromYawPitch --\n");
   {
     auto len = [](const Quat& q) { return std::sqrt(q.x * q.x + q.y * q.y + q.z * q.z + q.w * q.w); };

@@ -1,20 +1,25 @@
-// MyMod.cpp - "Screen POV" v1.1.0  (LeviLauncher native mod, Preloader SDK `pl::` API)
+// MyMod.cpp - "Screen POV" v1.2.0  (LeviLauncher native mod, Preloader SDK `pl::` API)
 //
 //   A small, standalone camera-only mod: set your own screen POV from the in-game Mod Menu.
 //   Mod Menu -> "Screen POV":
-//     * Toggle "Screen POV"   - master on/off. ON = the camera holds the pose set below.
-//                               While ON the mouse/touch look is IGNORED and the body is pinned -
-//                               this is a FIXED POV. OFF = the camera goes back to the game (always
-//                               the safe state).
+//     * Toggle "Screen POV"   - master on/off. ON = the render camera is pinned to the pose below
+//                               (written into the CameraComponent before every render, restored after).
+//                               OFF = the camera goes fully back to the game (always the safe state).
 //     * "Yaw (deg)"           - absolute MC yaw (0 south, 90 west, 180 north, 270 east)
 //     * "Pitch (deg)"         - absolute MC pitch (+ looks down, - looks up)
-//     * "Offset X / Y / Z"    - position offset relative to the player's eye (relative mode),
-//                               or absolute world coordinates (relative mode off)
+//     * "Roll (deg)"          - camera roll (+ = right wing down); needs the v1.2 render hook
+//     * "Offset X / Y / Z"    - camera eye offset relative to the player's eye (relative mode),
+//                               or absolute world-space view_offset delta (relative mode off).
+//                               Position write only engages when the on-device probe confirms the
+//                               +0x00..+0x0c view_offset field (see pov_mod.log).
 //     * "Relative to player"  - toggle between the two position modes
-//     * "Snap to game view"   - copy the live game view into the override (yaw/pitch := current, offsets 0)
+//     * "Snap to game view"   - copy the live game view into the override (yaw/pitch := current, offsets/roll 0)
 //     * "Live (release camera)" - hands the camera straight back to the game
 //   Camera = screen POV only. The player's body is NEVER touched (no physics/rotation/movement).
 //   Log: .../org.levimc.launcher/kurumi/pov_mod.log (fallback: the mod's data dir).
+//   v1.2 writes the pose into the LocalPlayer's CameraComponent around the render pass (Do-A-
+//   Barrel-Roll pattern) instead of poking the player-side sync object. Diagnostics are logged
+//   on-device: probe result, component hexdump, LRP camera position, per-phase counters.
 #include <pl/Mod.hpp>
 #include <pl/ModMenu.hpp>
 
@@ -44,6 +49,7 @@ constexpr const char* kModuleId = "screen_pov";
 struct Config {
   float yaw = 0;    // degrees
   float pitch = 0;  // degrees
+  float roll = 0;   // degrees
   float px = 0.0f, py = 0.0f, pz = 0.0f;
   bool relative = true;
   bool invertYaw = false;
@@ -75,6 +81,7 @@ bool loadConfig(const fs::path& file, Config& out, std::vector<std::string>& war
     any = true;
     if (key == "yaw") out.yaw = parseFloat(value, out.yaw);
     else if (key == "pitch") out.pitch = parseFloat(value, out.pitch);
+    else if (key == "roll") out.roll = parseFloat(value, out.roll);
     else if (key == "pos_x") out.px = parseFloat(value, out.px);
     else if (key == "pos_y") out.py = parseFloat(value, out.py);
     else if (key == "pos_z") out.pz = parseFloat(value, out.pz);
@@ -91,6 +98,7 @@ void saveConfig(const fs::path& file, const Config& c) {
   out << "# Screen POV override values (yaw/pitch in degrees, pos in blocks)\n"
       << "yaw=" << c.yaw << "\n"
       << "pitch=" << c.pitch << "\n"
+      << "roll=" << c.roll << "\n"
       << "pos_x=" << c.px << "\n"
       << "pos_y=" << c.py << "\n"
       << "pos_z=" << c.pz << "\n"
@@ -148,6 +156,8 @@ class ScreenPovMod {
                     pl::modmenu::ConfigType::SliderFloat, std::to_string(c.yaw), "-180", "180")
             .config("pov_pitch", "Pitch (deg) + down / - up",
                     pl::modmenu::ConfigType::SliderFloat, std::to_string(c.pitch), "-90", "90")
+            .config("pov_roll", "Roll (deg) + = right wing down",
+                    pl::modmenu::ConfigType::SliderFloat, std::to_string(c.roll), "-180", "180")
             .config("pos_x", "Offset X (relative) / X (absolute)",
                     pl::modmenu::ConfigType::SliderFloat, std::to_string(c.px), "-20", "20")
             .config("pos_y", "Offset Y (relative) / Y (absolute)",
@@ -191,6 +201,7 @@ class ScreenPovMod {
     PovRequest req;
     req.yaw = g_config.yaw;
     req.pitch = g_config.pitch;
+    req.roll = g_config.roll;
     req.px = g_config.px;
     req.py = g_config.py;
     req.pz = g_config.pz;
@@ -225,6 +236,7 @@ class ScreenPovMod {
       std::lock_guard<std::mutex> lk(g_mu);
       if (key == "pov_yaw") g_config.yaw = wrapAngle(parseFloat(value, g_config.yaw));
       else if (key == "pov_pitch") g_config.pitch = clampf(parseFloat(value, g_config.pitch), -90.f, 90.f);
+      else if (key == "pov_roll") g_config.roll = wrapAngle(parseFloat(value, g_config.roll));
       else if (key == "pos_x") g_config.px = parseFloat(value, g_config.px);
       else if (key == "pos_y") g_config.py = parseFloat(value, g_config.py);
       else if (key == "pos_z") g_config.pz = parseFloat(value, g_config.pz);
@@ -249,6 +261,7 @@ class ScreenPovMod {
       std::lock_guard<std::mutex> lk(g_mu);
       g_config.yaw = wrapAngle(eye.yaw);
       g_config.pitch = clampf(eye.pitch, -90.f, 90.f);
+      g_config.roll = 0.0f;
       g_config.px = g_config.py = g_config.pz = 0.0f;
       g_config.relative = true;
       applyRequestLocked();
@@ -256,7 +269,7 @@ class ScreenPovMod {
     }
     {
       std::lock_guard<std::mutex> lk(g_mu);
-      flog("snap: override := live view (yaw=" + std::to_string(g_config.yaw) + " pitch=" + std::to_string(g_config.pitch) + ")");
+      flog("snap: override := live view (yaw=" + std::to_string(g_config.yaw) + " pitch=" + std::to_string(g_config.pitch) + " roll=0)");
     }
   }
 
