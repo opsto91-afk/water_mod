@@ -1,4 +1,8 @@
-name: Water Mod Build
+name: Screen POV Build
+
+# NOTE (2026-11-11): at the user's request this workflow now builds ONLY the Screen POV mod.
+# The Water Tweaks / Infinite Flow / V4 Cine Mod jobs were removed - their source and history
+# remain in this repository (see git log); re-add them if ever needed.
 
 on:
   push:
@@ -8,16 +12,8 @@ permissions:
   contents: read
 
 jobs:
-  host-tests:
-    name: Host patch tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run patch tests
-        run: make -C tests run
-
-  android:
-    name: Build arm64 LeviLauncher package
+  pov-mod:
+    name: Build Screen POV mod (from pov_mod/)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,17 +21,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake zip
+      - name: Run pov_mod core tests
+        run: make -C pov_mod/tests run
       - name: Set up Android SDK and NDK
         uses: android-actions/setup-android@v3
         with:
           packages: "ndk;27.2.12479018"
       - name: Configure NDK path
         run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
-      - name: Build water_mod.levipack
-        run: ./build.sh
-      - name: Upload LeviLauncher package
+      - name: Build pov_mod.levipack
+        run: cd pov_mod && bash ./build.sh
+      - name: Upload Screen POV package
         uses: actions/upload-artifact@v4
         with:
-          name: water_mod
-          path: dist/water_mod.levipack
+          name: screen_pov
+          path: pov_mod/dist/pov_mod.levipack
           if-no-files-found: error
