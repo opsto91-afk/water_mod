@@ -75,3 +75,30 @@ jobs:
           name: cinematic_mod
           path: cine_v4/dist/cinematic_mod.levipack
           if-no-files-found: error
+
+  # Screen POV (standalone camera-only mod, source in pov_mod/) - separate .levipack, does NOT touch the water builds above.
+  pov-mod:
+    name: Build Screen POV mod (from pov_mod/)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake zip
+      - name: Run pov_mod core tests
+        run: make -C pov_mod/tests run
+      - name: Set up Android SDK and NDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "ndk;27.2.12479018"
+      - name: Configure NDK path
+        run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - name: Build pov_mod.levipack
+        run: cd pov_mod && bash ./build.sh
+      - name: Upload Screen POV package
+        uses: actions/upload-artifact@v4
+        with:
+          name: screen_pov
+          path: pov_mod/dist/pov_mod.levipack
+          if-no-files-found: error
