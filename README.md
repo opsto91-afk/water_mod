@@ -112,3 +112,5 @@ A separate, camera-only mod: set your own screen POV from the in-game Mod Menu
 (yaw / pitch / position offsets, relative-to-player or absolute) — body never touched.
 It is its **own** `.levipack` (`pov_mod.levipack`, CI artifact `screen_pov`), independent of the
 Water Tweaks mod above. See `pov_mod/POV_MOD.md` for usage and the honest on-device status.
+The CI workflow now builds only this mod (Water Tweaks / Infinite Flow / V4 Cine Mod CI builds were
+removed on 2026-11-11 at the maintainer's request; their source remains in this repository).

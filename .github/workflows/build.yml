@@ -1,4 +1,8 @@
-name: Water Mod Build
+name: Screen POV Build
+
+# NOTE (2026-11-11): at the user's request this workflow now builds ONLY the Screen POV mod.
+# The Water Tweaks / Infinite Flow / V4 Cine Mod jobs were removed - their source and history
+# remain in this repository (see git log); re-add them if ever needed.
 
 on:
   push:
@@ -8,75 +12,6 @@ permissions:
   contents: read
 
 jobs:
-  host-tests:
-    name: Host patch tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run patch tests
-        run: make -C tests run
-
-  android:
-    name: Build arm64 LeviLauncher package
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake zip
-      - name: Set up Android SDK and NDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: "ndk;27.2.12479018"
-      - name: Configure NDK path
-        run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
-      - name: Build water_mod.levipack and infinite_flow.levipack
-        run: ./build.sh
-      - name: Upload LeviLauncher package
-        uses: actions/upload-artifact@v4
-        with:
-          name: water_mod
-          path: dist/water_mod.levipack
-          if-no-files-found: error
-      - name: Upload Infinite Flow package
-        uses: actions/upload-artifact@v4
-        with:
-          name: infinite_flow
-          path: dist/infinite_flow.levipack
-          if-no-files-found: error
-
-  # V4 Cine Mod (delivery zip committed at the repo root) - same NDK/build.sh flow.
-  # Produces cinematic_mod.levipack as an artifact. Does NOT touch the water builds above.
-  cine-mod:
-    name: Build V4 Cine Mod (from v4_cine_mod.zip)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Install build tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake zip unzip
-      - name: Unpack V4 cine mod source
-        run: unzip -q v4_cine_mod.zip
-      - name: Run cine mod engine tests
-        run: make -C cine_v4/tests run
-      - name: Set up Android SDK and NDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: "ndk;27.2.12479018"
-      - name: Configure NDK path
-        run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
-      - name: Build cinematic_mod.levipack
-        run: cd cine_v4 && bash ./build.sh
-      - name: Upload cine mod package
-        uses: actions/upload-artifact@v4
-        with:
-          name: cinematic_mod
-          path: cine_v4/dist/cinematic_mod.levipack
-          if-no-files-found: error
-
-  # Screen POV (standalone camera-only mod, source in pov_mod/) - separate .levipack, does NOT touch the water builds above.
   pov-mod:
     name: Build Screen POV mod (from pov_mod/)
     runs-on: ubuntu-latest

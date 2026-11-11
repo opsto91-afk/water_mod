@@ -49,6 +49,12 @@ int main() {
     req.relativePos = true;
     out = computePose(req, Pose{}, false);  // no player known -> falls back to absolute interpretation
     check(near(out.x, 1.5f) && near(out.y, 2.f) && near(out.z, -4.f), "relative mode falls back to raw sliders without player");
+    req.yaw = 45.f; req.pitch = 10.f; req.invertYaw = true;
+    out = computePose(req, eye, true);
+    check(near(out.yaw, -45.f) && near(out.pitch, 10.f), "invertYaw flips only yaw");
+    req.invertPitch = true;
+    out = computePose(req, eye, true);
+    check(near(out.yaw, -45.f) && near(out.pitch, -10.f), "invertPitch flips only pitch");
   }
 
   std::printf("-- quatFromYawPitch --\n");

@@ -35,22 +35,21 @@ constexpr const char* kKurumiLog =
     "/storage/emulated/0/Android/media/org.levimc.launcher/kurumi/pov_mod.log";
 constexpr const char* kLogName = "pov_mod.log";
 
-// ---- signatures (60.4 bytes; same strings BedrockTools ships in its table) -----------
-// id 0x8c = freelook headGet (used as the per-frame camera-sync call site)
-// id 0x23 = breadcrumbs module hook (used defensively as the pre-render write point)
+// ---- signatures (same strings BedrockTools 60.4 uses for Freelook) -------------------
+// UpdatePlayerFromCamera  -> the per-frame player/camera sync (Freelook hooks this too, and
+//                            SKIPS the original while freelook is active).
+// LocalPlayerApplyTurnDelta -> the mouse/touch look delta; Freelook blocks it to keep the body
+//                            from turning. We drop it entirely while the fixed POV is active so
+//                            neither the body NOR the view can drift away from our pose.
 constexpr std::string_view kSigUpdatePlayerFromCamera =
     "? ? ? D1 ? ? ? FD ? ? ? A9 ? ? ? F9 ? ? ? A9 ? ? ? A9 ? ? ? 91 54 D0 3B D5 ? ? ? 52";
-constexpr std::string_view kSigRenderLevel =
-    "? ? ? D1 ? ? ? FD ? ? ? 6D ? ? ? 6D ? ? ? 6D ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? 91 57 D0 3B D5";
+constexpr std::string_view kSigLocalPlayerApplyTurnDelta =
+    "? ? ? D1 ? ? ? FD ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? 91 56 D0 3B D5 F3 03 00 AA F4 03 01 AA ? ? ? F9 ? ? ? F8 ? ? ? F9 ? ? ? F9";
 
 // ---- offsets (Bedrock 60.4, from QYCottage/BedrockTools sdk/offsets, MIT) -------------
 namespace off {
 inline constexpr std::size_t Actor_mStateVectorComponent = 0x228;
 inline constexpr std::size_t Actor_mRotationComponent = 0x238;
-inline constexpr std::size_t Actor_mLevel = 0x1F0;
-inline constexpr std::size_t Actor_mDimension = 0x1E0;
-inline constexpr std::size_t LevelRenderer_mLevelRendererPlayer = 0x430;
-inline constexpr std::size_t LevelRendererPlayer_mCamPos = 0x614;  // Vec3, render-side eye pos
 inline constexpr std::size_t CameraComponent_mOrientation = 0x28;  // 4 floats = quaternion
 }  // namespace off
 
@@ -172,8 +171,8 @@ std::atomic<bool> g_started{false};
 std::atomic<bool> g_stop{false};
 std::thread g_thread;
 
-std::atomic<unsigned long> g_diagUpdate{0}, g_diagRender{0}, g_diagPoseW{0}, g_diagCamW{0};
-std::atomic<bool> g_diagUpdateFirst{false}, g_diagRenderFirst{false};
+std::atomic<unsigned long> g_diagUpdate{0}, g_diagTurnDrop{0}, g_diagPoseW{0};
+std::atomic<bool> g_diagUpdateFirst{false}, g_diagTurnFirst{false};
 Clock::time_point g_diagBeat = Clock::now();
 
 void* rotationComponent(void* player) {
@@ -186,22 +185,6 @@ void* stateVectorComponent(void* player) {
   if (!memMapped(static_cast<char*>(player) + off::Actor_mStateVectorComponent, 8)) return nullptr;
   return *reinterpret_cast<void**>(static_cast<char*>(player) + off::Actor_mStateVectorComponent);
 }
-void* actorLevel(void* player) {
-  if (!player) return nullptr;
-  if (!memMapped(static_cast<char*>(player) + off::Actor_mLevel, 8)) return nullptr;
-  return *reinterpret_cast<void**>(static_cast<char*>(player) + off::Actor_mLevel);
-}
-void* actorDimension(void* player) {
-  if (!player) return nullptr;
-  if (!memMapped(static_cast<char*>(player) + off::Actor_mDimension, 8)) return nullptr;
-  return *reinterpret_cast<void**>(static_cast<char*>(player) + off::Actor_mDimension);
-}
-
-bool playerLooksValid(void* player) {
-  return player && rotationComponent(player) && stateVectorComponent(player) &&
-         actorLevel(player) && actorDimension(player);
-}
-
 // reads the player's feet position + rotation into out (best effort)
 bool readPlayerEyeLocked(Pose& out) {
   void* player = g_player.load(std::memory_order_acquire);
@@ -236,10 +219,10 @@ void diagBeat(const char* tag) {
   PovRequest r{};
   { std::lock_guard<std::mutex> lk(g_mu); r = g_req; }
   char b[320];
-  std::snprintf(b, sizeof b, "%s override=%d update=%lu render=%lu poseW=%lu camW=%lu want(yaw=%.1f pitch=%.1f pos=%.1f,%.1f,%.1f rel=%d)",
-                tag, g_override.load() ? 1 : 0, g_diagUpdate.load(), g_diagRender.load(),
-                g_diagPoseW.load(), g_diagCamW.load(), r.yaw, r.pitch, r.px, r.py, r.pz,
-                r.relativePos ? 1 : 0);
+  std::snprintf(b, sizeof b, "%s override=%d update=%lu dropped=%lu poseW=%lu want(yaw=%.1f pitch=%.1f pos=%.1f,%.1f,%.1f rel=%d invYaw=%d invPitch=%d)",
+                tag, g_override.load() ? 1 : 0, g_diagUpdate.load(), g_diagTurnDrop.load(),
+                g_diagPoseW.load(), r.yaw, r.pitch, r.px, r.py, r.pz,
+                r.relativePos ? 1 : 0, r.invertYaw ? 1 : 0, r.invertPitch ? 1 : 0);
   flog(b);
 }
 
@@ -253,9 +236,9 @@ Pose desiredPose() {
 
 // ---- frame hooks -------------------------------------------------------------------------
 using UpdatePlayerFromCameraFn = void (*)(void*, void*, void*);
-using RenderLevelFn = void (*)(void*, void*, void*);
+using TurnDeltaFn = void (*)(void*, void*);
 UpdatePlayerFromCameraFn g_origUpdatePlayer = nullptr;
-RenderLevelFn g_origRenderLevel = nullptr;
+TurnDeltaFn g_origTurnDelta = nullptr;
 
 void updatePlayerDetour(void* camera, void* component, void* player) {
   g_diagUpdate.fetch_add(1, std::memory_order_relaxed);
@@ -265,61 +248,51 @@ void updatePlayerDetour(void* camera, void* component, void* player) {
     flog(b);
   }
   if (player) g_player.store(player, std::memory_order_release);
-  const bool over = g_override.load(std::memory_order_acquire);
+  if (g_override.load(std::memory_order_acquire)) {
+    // Freelook does the same: SKIP the original sync and drive the camera component ourselves.
+    crash::setStage("updatePlayer:override");
+    if (camera && memMapped(camera, off::CameraComponent_mOrientation + sizeof(Quat))) {
+      const Pose p = desiredPose();
+      const Quat q = quatFromYawPitch(p.yaw, p.pitch);
+      std::memcpy(static_cast<char*>(camera) + off::CameraComponent_mOrientation, &q, sizeof q);
+      g_diagPoseW.fetch_add(1, std::memory_order_relaxed);
+    }
+    diagBeat("override");
+    return;
+  }
   crash::setStage("updatePlayer:original");
   if (g_origUpdatePlayer) g_origUpdatePlayer(camera, component, player);
-  // freelook-style: AFTER the game synced the camera, re-apply our orientation on top.
-  if (over && camera && memMapped(camera, off::CameraComponent_mOrientation + sizeof(Quat))) {
-    const Pose p = desiredPose();
-    const Quat q = quatFromYawPitch(p.yaw, p.pitch);
-    std::memcpy(static_cast<char*>(camera) + off::CameraComponent_mOrientation, &q, sizeof q);
-    g_diagPoseW.fetch_add(1, std::memory_order_relaxed);
-    diagBeat("override");
-  }
 }
 
-void renderLevelDetour(void* renderer, void* context, void* view) {
-  g_diagRender.fetch_add(1, std::memory_order_relaxed);
-  if (!g_diagRenderFirst.exchange(true)) {
-    char b[200];
-    std::snprintf(b, sizeof b, "renderLevelDetour FIRST call: renderer=%p view=%p", renderer, view);
-    flog(b);
-  }
-  void* playerRenderer = nullptr;
-  if (renderer) {
-    if (memMapped(static_cast<char*>(renderer) + off::LevelRenderer_mLevelRendererPlayer, 8)) {
-      playerRenderer = *reinterpret_cast<void**>(static_cast<char*>(renderer) + off::LevelRenderer_mLevelRendererPlayer);
+void turnDeltaDetour(void* player, void* delta) {
+  if (player) g_player.store(player, std::memory_order_release);
+  if (g_override.load(std::memory_order_acquire)) {
+    // Drop the look delta entirely: neither the body nor the view can drift off our pose.
+    g_diagTurnDrop.fetch_add(1, std::memory_order_relaxed);
+    if (!g_diagTurnFirst.exchange(true)) {
+      flog("turnDeltaDetour: first delta DROPPED (fixed POV is writing the camera)");
     }
+    return;
   }
-  const bool over = g_override.load(std::memory_order_acquire);
-  if (over && playerRenderer) {
-    void* at = static_cast<char*>(playerRenderer) + off::LevelRendererPlayer_mCamPos;
-    if (memMapped(at, sizeof(float) * 3)) {
-      const Pose p = desiredPose();
-      const float eye[3] = {p.x, p.y, p.z};
-      std::memcpy(at, eye, sizeof eye);
-      g_diagCamW.fetch_add(1, std::memory_order_relaxed);
-    }
-  }
-  crash::setStage("renderLevel:original");
-  if (g_origRenderLevel) g_origRenderLevel(renderer, context, view);
+  crash::setStage("turnDelta:original");
+  if (g_origTurnDelta) g_origTurnDelta(player, delta);
 }
 
 // ---- lifecycle ---------------------------------------------------------------------------
-struct Resolved { uintptr_t updatePlayerFromCamera = 0, renderLevel = 0; };
+struct Resolved { uintptr_t updatePlayerFromCamera = 0, localPlayerApplyTurnDelta = 0; };
 Resolved g_resolved;
 
 bool resolveSignatures() {
   const std::string lib(kLibName);
-  const std::vector<std::string> patterns = {std::string(kSigUpdatePlayerFromCamera), std::string(kSigRenderLevel)};
+  const std::vector<std::string> patterns = {std::string(kSigUpdatePlayerFromCamera), std::string(kSigLocalPlayerApplyTurnDelta)};
   const auto found = pl::memory::resolveSignatures(patterns, lib.c_str());
   auto get = [&](std::string_view p) -> uintptr_t {
     const auto it = found.find(std::string(p));
     return it == found.end() ? 0 : it->second;
   };
   g_resolved.updatePlayerFromCamera = get(kSigUpdatePlayerFromCamera);
-  g_resolved.renderLevel = get(kSigRenderLevel);
-  return g_resolved.updatePlayerFromCamera != 0 && g_resolved.renderLevel != 0;
+  g_resolved.localPlayerApplyTurnDelta = get(kSigLocalPlayerApplyTurnDelta);
+  return g_resolved.updatePlayerFromCamera != 0 && g_resolved.localPlayerApplyTurnDelta != 0;
 }
 
 void unhookAll() {
@@ -328,9 +301,9 @@ void unhookAll() {
     pl::memory::unhook(reinterpret_cast<void*>(g_resolved.updatePlayerFromCamera), reinterpret_cast<void*>(updatePlayerDetour));
     g_origUpdatePlayer = nullptr;
   }
-  if (g_origRenderLevel) {
-    pl::memory::unhook(reinterpret_cast<void*>(g_resolved.renderLevel), reinterpret_cast<void*>(renderLevelDetour));
-    g_origRenderLevel = nullptr;
+  if (g_origTurnDelta) {
+    pl::memory::unhook(reinterpret_cast<void*>(g_resolved.localPlayerApplyTurnDelta), reinterpret_cast<void*>(turnDeltaDetour));
+    g_origTurnDelta = nullptr;
   }
   g_hooksInstalled.store(false);
   flog("hooks removed");
@@ -354,18 +327,20 @@ void watchLoop() {
     if (!resolveSignatures()) {
       flog("SIGNATURE RESOLUTION FAILED - Screen POV stays INACTIVE (check the log for the missing one)");
       if (!g_resolved.updatePlayerFromCamera) flog("  missing: UpdatePlayerFromCamera");
-      if (!g_resolved.renderLevel) flog("  missing: RenderLevel");
+      if (!g_resolved.localPlayerApplyTurnDelta) flog("  missing: LocalPlayerApplyTurnDelta");
       return;
     }
     crash::setStage("hooks");
     const bool r2 = pl::memory::hook(reinterpret_cast<void*>(g_resolved.updatePlayerFromCamera),
                                      reinterpret_cast<void*>(updatePlayerDetour),
                                      reinterpret_cast<void**>(&g_origUpdatePlayer)) == 0;
-    const bool r3 = pl::memory::hook(reinterpret_cast<void*>(g_resolved.renderLevel),
-                                     reinterpret_cast<void*>(renderLevelDetour),
-                                     reinterpret_cast<void**>(&g_origRenderLevel)) == 0;
+    const bool r3 = pl::memory::hook(reinterpret_cast<void*>(g_resolved.localPlayerApplyTurnDelta),
+                                     reinterpret_cast<void*>(turnDeltaDetour),
+                                     reinterpret_cast<void**>(&g_origTurnDelta)) == 0;
     flog(std::string("hooks install: UpdatePlayerFromCamera=") + (r2 ? "ok" : "FAILED") +
-         " RenderLevel=" + (r3 ? "ok" : "FAILED"));
+         " LocalPlayerApplyTurnDelta=" + (r3 ? "ok" : "FAILED"));
+    flog(std::string("sig UpdatePlayerFromCamera: ") + std::string(kSigUpdatePlayerFromCamera));
+    flog(std::string("sig LocalPlayerApplyTurnDelta: ") + std::string(kSigLocalPlayerApplyTurnDelta));
     g_hooksInstalled.store(r2 && r3);
     if (r2 && r3) crash::setStage("ready");
     return;
@@ -389,7 +364,7 @@ void bridgeInit(const std::string& dataDir) {
   crash::install();
   LibMap lib;
   if (findLib(lib)) crash::setLib(lib.base, lib.size);
-  flog(std::string("---- Screen POV v1.0.0 start  log: ") + g_log.path);
+  flog(std::string("---- Screen POV v1.1.0 start  log: ") + g_log.path);
   crash::setStage("load");
   g_stop.store(false);
   g_thread = std::thread(&watchLoop);

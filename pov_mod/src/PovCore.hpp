@@ -63,6 +63,8 @@ struct PovRequest {
   float pitch = 0;        // absolute MC pitch (+ = look down)
   float px = 0, py = 0, pz = 0;   // position offset (relative mode) or absolute world position
   bool relativePos = true;        // true: pos sliders are added to the player's eye position
+  bool invertYaw = false;         // device-test aid: flip the sign of the applied yaw
+  bool invertPitch = false;       // device-test aid: flip the sign of the applied pitch
 };
 
 // Build the final world-space eye pose for an override request.
@@ -80,8 +82,8 @@ inline Pose computePose(const PovRequest& req, const Pose& playerEye, bool hasPl
     out.y = req.py;
     out.z = req.pz;
   }
-  out.yaw = req.yaw;
-  out.pitch = req.pitch;
+  out.yaw = req.invertYaw ? -req.yaw : req.yaw;
+  out.pitch = req.invertPitch ? -req.pitch : req.pitch;
   return out;
 }
 

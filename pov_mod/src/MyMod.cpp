@@ -1,9 +1,11 @@
-// MyMod.cpp - "Screen POV" v1.0.0  (LeviLauncher native mod, Preloader SDK `pl::` API)
+// MyMod.cpp - "Screen POV" v1.1.0  (LeviLauncher native mod, Preloader SDK `pl::` API)
 //
 //   A small, standalone camera-only mod: set your own screen POV from the in-game Mod Menu.
 //   Mod Menu -> "Screen POV":
 //     * Toggle "Screen POV"   - master on/off. ON = the camera holds the pose set below.
-//                               OFF = the camera goes back to the game (always the safe state).
+//                               While ON the mouse/touch look is IGNORED and the body is pinned -
+//                               this is a FIXED POV. OFF = the camera goes back to the game (always
+//                               the safe state).
 //     * "Yaw (deg)"           - absolute MC yaw (0 south, 90 west, 180 north, 270 east)
 //     * "Pitch (deg)"         - absolute MC pitch (+ looks down, - looks up)
 //     * "Offset X / Y / Z"    - position offset relative to the player's eye (relative mode),
@@ -44,6 +46,8 @@ struct Config {
   float pitch = 0;  // degrees
   float px = 0.0f, py = 0.0f, pz = 0.0f;
   bool relative = true;
+  bool invertYaw = false;
+  bool invertPitch = false;
 };
 
 Config g_config;
@@ -75,6 +79,8 @@ bool loadConfig(const fs::path& file, Config& out, std::vector<std::string>& war
     else if (key == "pos_y") out.py = parseFloat(value, out.py);
     else if (key == "pos_z") out.pz = parseFloat(value, out.pz);
     else if (key == "relative") out.relative = parseBool(value, out.relative);
+    else if (key == "invert_yaw") out.invertYaw = parseBool(value, out.invertYaw);
+    else if (key == "invert_pitch") out.invertPitch = parseBool(value, out.invertPitch);
     else warnings.push_back("unknown key: " + key);
   }
   return any;
@@ -88,7 +94,9 @@ void saveConfig(const fs::path& file, const Config& c) {
       << "pos_x=" << c.px << "\n"
       << "pos_y=" << c.py << "\n"
       << "pos_z=" << c.pz << "\n"
-      << "relative=" << (c.relative ? 1 : 0) << "\n";
+      << "relative=" << (c.relative ? 1 : 0) << "\n"
+      << "invert_yaw=" << (c.invertYaw ? 1 : 0) << "\n"
+      << "invert_pitch=" << (c.invertPitch ? 1 : 0) << "\n";
 }
 
 class ScreenPovMod {
@@ -148,6 +156,10 @@ class ScreenPovMod {
                     pl::modmenu::ConfigType::SliderFloat, std::to_string(c.pz), "-20", "20")
             .config("relative", "Relative to player (off = world position)",
                     pl::modmenu::ConfigType::Toggle, c.relative ? "true" : "false")
+            .config("invert_yaw", "Invert yaw (flip sign)",
+                    pl::modmenu::ConfigType::Toggle, c.invertYaw ? "true" : "false")
+            .config("invert_pitch", "Invert pitch (flip sign)",
+                    pl::modmenu::ConfigType::Toggle, c.invertPitch ? "true" : "false")
             .config("snap_view", "Snap to game view (copy live view)", pl::modmenu::ConfigType::Button)
             .config("live_release", "Live (release camera back to game)", pl::modmenu::ConfigType::Button)
             .registerModule();
@@ -183,6 +195,8 @@ class ScreenPovMod {
     req.py = g_config.py;
     req.pz = g_config.pz;
     req.relativePos = g_config.relative;
+    req.invertYaw = g_config.invertYaw;
+    req.invertPitch = g_config.invertPitch;
     setRequest(req);
   }
 
@@ -215,6 +229,8 @@ class ScreenPovMod {
       else if (key == "pos_y") g_config.py = parseFloat(value, g_config.py);
       else if (key == "pos_z") g_config.pz = parseFloat(value, g_config.pz);
       else if (key == "relative") g_config.relative = parseBool(value, g_config.relative);
+      else if (key == "invert_yaw") g_config.invertYaw = parseBool(value, g_config.invertYaw);
+      else if (key == "invert_pitch") g_config.invertPitch = parseBool(value, g_config.invertPitch);
       else return;
       applyRequestLocked();
       persistLocked();

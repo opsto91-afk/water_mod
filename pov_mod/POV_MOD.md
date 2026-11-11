@@ -1,56 +1,80 @@
-# Screen POV v1.0.0 (LeviLauncher native mod)
+# Screen POV v1.1.0 (LeviLauncher native mod)
 
-Standalone, **camera-only** POV mod — separate from the Water Tweaks mod and from the V4 Cine Mod.
+Standalone, **camera-only** fixed POV mod — separate from the Water Tweaks mod and from the V4 Cine Mod.
 Everything is set from the in-game Mod Menu; no file editing required.
 
 ## Usage (in game)
 
 1. Import `pov_mod.levipack` in LeviLauncher and enable the mod.
-2. Open the Mod Menu (the floating button) → **Screen POV**.
-3. Toggle **Screen POV** ON → the camera now holds the pose configured below.
-   Toggle it OFF → the camera is fully back to the game (this is always the safe state).
+2. Mod Menu (floating button) → **Screen POV**.
+3. Toggle **Screen POV** ON → the camera now **holds the pose** set below. Mouse/touch look
+   input is **ignored** while ON (fixed POV — this is deliberate), and the player body is pinned
+   too (it never rotates). Toggle OFF → the camera and all look input go back to the game
+   (always the safe state).
 4. **Yaw (deg)** — absolute yaw (0 = south, 90 = west, 180 = north, 270 = east), −180..180.
    **Pitch (deg)** — absolute pitch (+ looks down, − looks up), −90..90.
-5. **Offset X / Y / Z** — position offset. With **Relative to player** ON (default) the offset is
-   added to the player's eye position; toggle it OFF to enter absolute world coordinates.
-6. **Snap to game view** — copies the current live game view into the override (yaw/pitch = live
-   values, offsets 0, relative mode).
-7. **Live (release camera)** — hands the camera straight back to the game without leaving the menu.
+5. **Offset X / Y / Z** — position offset added to the player's eye position (relative mode,
+   default), or absolute world coordinates (relative mode off). Follows the player while walking.
+6. **Invert yaw** / **Invert pitch** — flip the sign of the applied angle. Device-test aid:
+   if the view ends up mirrored/backwards on your build, flip these instead of rebuilding.
+7. **Snap to game view** — copies the live view into the override (yaw/pitch = current, offsets 0,
+   relative mode).
+8. **Live (release camera)** — hands the camera straight back to the game.
 
-The body is never touched: no physics, no rotation, no movement, no reach change — screen POV only.
+The body is never touched: no physics, no rotation, no movement — screen POV only.
 
 Values persist in `pov.cfg` in the mod's data dir. Log:
 `Android/media/org.levimc.launcher/kurumi/pov_mod.log` (fallback: the mod's data dir).
 
-## How it drives the camera
+## How it drives the camera (v1.1)
 
-* Hooks installed by a watcher thread once `libminecraftpe.so` is mapped:
-  * `UpdatePlayerFromCamera` (id 0x8c pattern) → **after** the original, re-applies the override
-    to the camera orientation quaternion (camera + `0x28`).
-  * `RenderLevel` (id 0x23 pattern) → **before** the original, writes the override eye position
-    to the render-side camera position (renderer → `+0x430` → `+0x614`).
-* The player pointer is captured from the `UpdatePlayerFromCamera` call itself (the
-  ClientInstanceUpdate signature never matched on this build, so it is not needed).
-* All writes are `mincore()`-guarded; the original functions are always called.
+Modelled directly on **BedrockTools Freelook** (github.com/QYCottage/BedrockTools,
+`src/modules/visual/freelook.cpp`) — the hooks below are the **exact same two signatures**
+Freelook uses on 1.21.x / 60.4:
 
-## Honest status (as of v1.0.0)
+| Hook | Signature (BedrockTools `SignatureId`) | Behaviour while override is ON |
+|---|---|---|
+| `UpdatePlayerFromCamera` | `? ? ? D1 … 91 54 D0 3B D5 ? ? ? 52` — per-frame player↔camera sync | original is **skipped** (like Freelook); we write our quaternion into the camera component (`camera + 0x28`) |
+| `LocalPlayerApplyTurnDelta` | `? ? ? D1 … 91 56 D0 3B D5 F3 03 00 AA F4 03 01 AA …` — mouse/touch look delta | original is **dropped** entirely, so the look input does nothing (body never rotates either) |
 
-* The override path has **not been demonstrated on device yet**. If the Mod Menu toggle works but
-  the view does not change, open `pov_mod.log`:
-  * `update=` / `render=` counters — are the hooks firing at all?
-  * `poseW=` / `camW=` — are the guarded writes landing, or skipped (offsets/signatures wrong
-    for this build)?
-  * `world` offsets used (`Camera +0x28`, `RendererPlayer +0x614`) come from the 60.4 public
-    offset tables and may not match your exact build.
-* Signatures come from the BedrockTools signature table for 60.4. If the signatures resolve but
-  nothing moves, send the log and the offsets will be the next thing to revisit.
+Why this matters / what we got wrong in v1.0:
+
+* v1.0 hooked the same `UpdatePlayerFromCamera` sync but **called the original unconditionally**
+  and then overwrote orientation. It also hooked a signature we believed was `RenderLevel`
+  (`… 91 57 D0 3B D5`) — BedrockTools maps that exact pattern to its `RenderLevel` id, but in this
+  build nothing camera-related happens there; the eye-position write before it could not have
+  any visual effect. Both removed in v1.1.
+* v1.0 never hooked `LocalPlayerApplyTurnDelta`, so the mouse look input still fed the game's own
+  camera path every frame — fighting our write. v1.1 drops the delta while ON (mirroring how
+  Freelook restores/pins player rotation), giving one single writer of the view: this mod.
+
+Offsets still used (BedrockTools `sdk/offsets`, MIT): camera quaternion at `CameraComponent + 0x28`.
+`mCamPos`/`LevelRendererPlayer` offsets are no longer used at all.
+Every write is `mincore()`-guarded; with override OFF the two functions pass through untouched.
+
+## Honest status
+
+* v1.1 is built from the Freelook-proven mechanism, but it is **still not demonstrated on device**.
+* If the view does not change after toggling Screen POV ON, open `pov_mod.log`:
+  * `update=` counter not growing → the `UpdatePlayerFromCamera` hook is never called
+    (signature matched nothing / wrong function on your build).
+  * `update=` growing but `poseW=` stuck at 0 → our camera-write is being skipped by the
+    `mincore()` guard (the `camera` pointer from the hook is not readable — wrong signature/build).
+  * `dropped=` not growing → the turn-delta hook is installed but the look path goes through a
+    different function on your build (then the view would still rotate on look).
+  * Everything grows but the view is mirrored/backwards → use **Invert yaw / Invert pitch**.
+* Signatures are version-specific to Bedrock-BedrockTools 60.4-era builds. If BedrockTools'
+  Freelook works on your device, these two signatures match your build by definition.
 
 ## Build
 
-CI: the repository's **Water Mod Build** workflow produces the `screen_pov` artifact
+CI (this repository): the **Screen POV Build** workflow produces the `screen_pov` artifact
 (`pov_mod.levipack`). Locally:
 
     ANDROID_NDK_HOME=/path/to/ndk ./build.sh        # inside pov_mod/
+
+Water Tweaks / Infinite Flow / V4 Cine Mod CI builds were removed on 2026-11-11 at the user's
+request; their source remains in this repository (see git history).
 
 ## Tests
 
