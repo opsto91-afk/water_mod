@@ -115,6 +115,21 @@ inline Pose computePose(const PovRequest& req, const Pose& playerEye, bool hasPl
   return out;
 }
 
+// Compose the camera position to write into the renderer's pose float3 (LRP+0x614).
+//   relativePos=true : live vanilla pose + (px,py,pz) offset
+//   relativePos=false: absolute world XYZ (px,py,pz), player ignored
+inline void composeCamPos(const PovRequest& req, const float cur[3], float out[3]) {
+  if (req.relativePos) {
+    out[0] = cur[0] + req.px;
+    out[1] = cur[1] + req.py;
+    out[2] = cur[2] + req.pz;
+  } else {
+    out[0] = req.px;
+    out[1] = req.py;
+    out[2] = req.pz;
+  }
+}
+
 // Safe float parse used by config callbacks (invalid strings keep the old value).
 inline float parseFloat(std::string_view s, float fallback) {
   // from_chars would be ideal; the mod menu values are simple "1.25"/"-3" strings.

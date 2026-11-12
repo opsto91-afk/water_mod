@@ -33,6 +33,25 @@ int main() {
   check(parseBool("off", true) == false, "parseBool off");
   check(parseBool("junk", true) == true, "parseBool junk falls back");
 
+  std::printf("-- composeCamPos --\n");
+  {
+    PovRequest req;  // defaults: pos 0, relative
+    const float cur[3] = {10.f, 65.f, 20.f};
+    float out[3] = {0, 0, 0};
+    composeCamPos(req, cur, out);
+    check(near(out[0], 10.f) && near(out[1], 65.f) && near(out[2], 20.f), "relative zero offset = live pose");
+    req.px = 1.5f; req.py = 4.f; req.pz = -2.f;
+    composeCamPos(req, cur, out);
+    check(near(out[0], 11.5f) && near(out[1], 69.f) && near(out[2], 18.f), "relative mode adds offset to live pose");
+    req.relativePos = false;
+    composeCamPos(req, cur, out);
+    check(near(out[0], 1.5f) && near(out[1], 4.f) && near(out[2], -2.f), "fixed mode ignores live pose");
+    req.relativePos = true; req.px = 0.f; req.py = 0.f; req.pz = 0.f;
+    const float cur2[3] = {-3.25f, 70.5f, 128.f};
+    composeCamPos(req, cur2, out);
+    check(near(out[0], -3.25f) && near(out[1], 70.5f) && near(out[2], 128.f), "relative mode tracks a moving live pose");
+  }
+
   std::printf("-- computePose --\n");
   {
     PovRequest req;  // defaults: yaw 0 pitch 0, pos 0, relative

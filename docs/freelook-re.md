@@ -432,3 +432,41 @@ This was in the uploads all along; analysed now. THE definitive v1.2 failure evi
   dump + match against menu-set known yaw (0/90/180/-90) at screenshot time.
 
 Logs: /tmp/arena-coding-uploads/pov_mod.log (device log, 25 KB, 3 sessions v1.0/1.1/1.2).
+## Phase 8 (2026-11-13) — USER'S zaphkiel zip: THE camera position writer FOUND
+
+User ethstruct'd the 0xb7a-b7d render module (+0x614 consumers/writers) and uploaded
+`1.zip` (302 FC targets, 149 .c dumps, zaphkiel_out.txt) to repo root on main; v1.3.0
+(direct LRP+0x614 write around RenderLevel) does NOT move the view on device.
+
+### fn_0xb7d4274 — the LRP+0x614 ease/tick (THE hook target for v1.4)
+- tpidr_el0 stack-protect prologue; args (x0=this=r19, x1=r21 flag-holder, byte @r21+0x4e);
+  global enable gate at 0x1407f080; global state at [0x1407f080..]+0x160 (r22) + byte flags — skips if disabled.
+- Reads desired/blend target from r19+0x5d8/0x5dc/0x5e0 (float3) and cached target r19+0x5e4/0x5ec;
+  fn_0x11f0ca80 formats float3 (debug/log paths — used in >15 dumps).
+- Distance check vs eased threshold (4x / 8..16 px) -> fn_0xb7a9370 (ease) or EVICT to
+  '"moveRenderingArea task"' (0x24a7788) async task (>threshold jumps).
+- Cached target update at r19+0x5e4/0x5ec (+fn_0xb7a9068 notify if changed).
+- END STORE (label_0xb7d46d0): r19+0x614 <- float3 (sp+0x5c) — the value the renderer reads;
+  + 0x61c/0x620/0x628 (d7c/d84 region) — more pose/FOV state (NOT position; leave untouched).
+- => v1.3 wrote BEFORE RenderLevel; the view matrix is built at/before this fn — v1.3 was too late.
+
+### Other +0x614 sites (secondary; NOT to hook)
+- fn_0xb7c7268: struct-copy fn — copies r19+0x8/0x10/0x14 into r20+0x614/0x61c/0x620 (set-pose API / jump cut).
+- fn_0xb7b1c18 / fn_0xb7a10e0 / fn_0xb7a7d08 / fn_0xb7afc3c / fn_0xb7d3d4c / fn_0xb7bf714: calls
+  fn_0x11f0ca80(this, r1=X+0x614) — float3-format helper (debug logs), reads only.
+- fn_0xb7c3b60: reads +0x614/0x618/0x61c after fn_0xfd86998 (component get-double*!) + fsub.
+- fn_0x27da444 (4.6 MB): .rodata STRING TABLE (ASCII log strings; misdumped as code).
+- fn_0x135d3690 (3.1 MB): giant logging/trace fn zoo ("BgfxFrameBuilder", "FrameBuilder - Insert").
+- 0x9a5xxxx/0x9c1xxxx clusters: particle/emitter + UI ("cameraOverlay" particle layer) — unrelated.
+
+### v1.4 design (hook = fn_0xb7d4274 wrapper)
+1. x0 = this (LevelRendererPlayer-ish). call orig; if override ON: cur = float3 LRP+0x614 (post-orig,
+   = vanilla eased target); target = relative ? cur + offset : absolute; write back float3 at +0x614.
+2. IMPLEMENTED AS-BUILT: no snapshot/restore at all (vanilla rewrites +0x614 every tick, OFF is clean).
+   RenderLevel detour demoted to diagnostic-only (live LRP+0x614 log). UpdatePlayerFromCamera skip
+   + TurnDelta passthrough unchanged. CamSetter fn_0xb7c7268 hooked with same post-orig overwrite
+   (packet path coverage).
+3. Signatures: user generated BOTH on-device — CamTick = fn_0xb7d4274 (14 insns, UNIQUE, quality 515),
+   CamSetter = fn_0xb7c7268 (14 insns, UNIQUE, quality 543). Both wired as AOB (pl::memory).
+4. zaphkiel abs-dump addresses == .so vaddr (identity map seg0 confirmed earlier); AOB sigs used
+   instead of raw va for portability. Local host tests PASS (composeCamPos added to PovCore).

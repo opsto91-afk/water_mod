@@ -1,18 +1,26 @@
 // PovBridge.cpp - implementation of the Screen POV camera drive.
 //
-// v1.3 (2026-11-12): XYZ-position override ONLY, driven straight into the renderer's own camera
-//       record - no entt, no CameraComponent, no signatures beyond 60.4's RenderLevel.
-//         1. UpdatePlayerFromCamera  -> SKIPPED while override ON (body never syncs from the camera)
-//         2. LocalPlayerApplyTurnDelta -> PASS-THROUGH while override ON (normal look works)
-//         3. RenderLevel (LevelRenderer::render) -> BEFORE the original: resolve
-//            renderer + 0x430 (LevelRenderer::mLevelRendererPlayer) -> LevelRendererPlayer,
-//            snapshot the float3 camera position at +0x614, write our XYZ over it
-//            (relative mode: live position + offset; fixed mode: absolute world position).
-//            AFTER the original: restore the 12 bytes.
-//       v1.2 failed on device because the CameraComponent entt hash (0x4f6047c7, from the
-//       Windows DABR build) matches nothing on Android (custom entt hash); the log showed
-//       writes=0 on every frame. The LRP+0x614 read path was verified live on device.
-//       Every step is logged to pov_mod.log.
+// v1.4 (2026-11-13): XYZ-position override ONLY, rewritten after the user's on-device RE.
+//   Device dumps (Zaphkiel RE of the on-device libminecraftpe.so, run 2026-11-13) identified
+//   THE two functions that write the renderer's pose float3 (LevelRendererPlayer + 0x614):
+//     * fn_0xb7d4274 "CamTick"   - the PER-FRAME camera-pose function: locks a global mutex,
+//       eases the pose (fn_0xb7a9370) or posts the "moveRenderingArea task" for big jumps,
+//       and WRITES the final pose at LRP+0x614..+0x61f on EVERY frame.
+//     * fn_0xb7c7268 "CamSetter" - the immediate pose-set funnel (camera packet/script path):
+//       calls the ease core fn_0xb7a8c50 and copies poseIn onto LRP+0x614/+0x61c/+0x620/+0x628.
+//   v1.3 failed on device because it injected BEFORE the original RenderLevel - the tick then
+//   OVERWROTE +0x614 with vanilla's eased pose before anything consumed it.
+// v1.4 design:
+//   1. UpdatePlayerFromCamera  -> SKIPPED while override ON (body never syncs from the camera)
+//   2. LocalPlayerApplyTurnDelta -> PASS-THROUGH while override ON (normal look works)
+//   3. RenderLevel             -> diagnostic only (logs the live LRP+0x614 value, no writes)
+//   4. CamTick                 -> wrapped: ORIGINAL runs first (vanilla pose written as usual),
+//                                 then - only if the override is ON - ONLY the 12-byte float3
+//                                 at LRP+0x614 is overwritten (relative: live pose + offset,
+//                                 fixed: absolute world XYZ). Orientation/FOV bytes untouched.
+//   5. CamSetter               -> same post-orig overwrite (covers the immediate packet path).
+//   Vanilla re-writes +0x614 every tick, so OFF needs NO restore snapshot/hack.
+//   Every step is logged to pov_mod.log.
 #include "PovBridge.hpp"
 
 #include <android/log.h>
@@ -54,12 +62,14 @@ constexpr const char* kLogName = "pov_mod.log";
 // ---- signatures (same strings BedrockTools 60.4 uses for Freelook / render capture) ----
 // UpdatePlayerFromCamera  -> the per-frame player/camera sync (Freelook hooks this too, and
 //                            SKIPS the original while freelook is active).
-// LocalPlayerApplyTurnDelta -> the mouse/touch look delta. As of v1.3 it is a PASS-THROUGH
+// LocalPlayerApplyTurnDelta -> the mouse/touch look delta. Since v1.3 it is a PASS-THROUGH
 //                            (the view is free; only the position is pinned). It stays hooked
 //                            so toggling back is cheap and the install log keeps its shape.
-// RenderLevel             -> LevelRenderer::render (BreadCrumbs/MotionBlur hook this too). v1.3:
-//                            inject the camera POSITION (float3 at LRP+0x614) before the original
-//                            renders and restore it after.
+// RenderLevel             -> LevelRenderer::render (BreadCrumbs/MotionBlur hook this too).
+//                            v1.4: diagnostic only (no position injection anymore).
+// CamTick                 -> fn_0xb7d4274 (Zaphkiel): the per-frame POSE writer of LRP+0x614.
+// CamSetter               -> fn_0xb7c7268 (Zaphkiel): the immediate pose funnel (packet path).
+//       Both cam sigs are on-device UNIQUE (14 insns each, matches=1).
 constexpr std::string_view kSigUpdatePlayerFromCamera =
     "? ? ? D1 ? ? ? FD ? ? ? A9 ? ? ? F9 ? ? ? A9 ? ? ? A9 ? ? ? 91 54 D0 3B D5 ? ? ? 52";
 constexpr std::string_view kSigLocalPlayerApplyTurnDelta =
@@ -67,7 +77,12 @@ constexpr std::string_view kSigLocalPlayerApplyTurnDelta =
 constexpr std::string_view kSigRenderLevel =
     "? ? ? D1 ? ? ? FD ? ? ? 6D ? ? ? 6D ? ? ? 6D ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? A9 ? ? ? 91 57 D0 3B D5";
 
-// v1.3: the CameraComponent entt hash is gone - the override writes the renderer's own
+constexpr std::string_view kSigCamTick =
+    "FF C3 06 D1 EA A3 00 FD E9 23 15 6D FD 7B 16 A9 FC 67 17 A9 F8 5F 18 A9 F6 57 19 A9 F4 4F 1A A9 FD 83 05 91 57 D0 3B D5 ? ? ? F0 94 02 02 91 E8 ? ? F9 F3 03 00 AA";
+constexpr std::string_view kSigCamSetter =
+    "FD 7B BE A9 F4 4F 01 A9 FD 03 00 91 F3 03 01 AA F4 03 00 AA ? ? ? 97 60 06 40 FD 61 12 40 BD 88 52 18 91 00 01 00 FD 81 1E 06 BD 60 42 41 FC 61 1E 40 BD 80 12 03 FD";
+
+// v1.4: the CameraComponent entt hash is long gone - the override writes the renderer's own
 // LevelRendererPlayer position float3 directly (verified on device). No entt anywhere.
 
 // ---- offsets (Bedrock 60.4, from QYCottage/BedrockTools sdk/offsets, MIT) -------------
@@ -196,8 +211,8 @@ std::atomic<bool> g_started{false};
 std::atomic<bool> g_stop{false};
 std::thread g_thread;
 
-std::atomic<unsigned long> g_diagUpdate{0}, g_diagWrites{0}, g_diagRestores{0},
-    g_diagRenderLevel{0}, g_diagInjectFail{0};
+std::atomic<unsigned long> g_diagUpdate{0}, g_diagWrites{0},
+    g_diagRenderLevel{0}, g_diagInjectFail{0}, g_diagTick{0}, g_diagSetter{0};
 std::atomic<bool> g_diagUpdateFirst{false}, g_diagRenderFirst{false};
 Clock::time_point g_diagBeat = Clock::now();
 
@@ -246,30 +261,19 @@ void diagBeat(const char* tag) {
   { std::lock_guard<std::mutex> lk(g_mu); r = g_req; }
   char b[256];
   std::snprintf(b, sizeof b,
-                "%s override=%d update=%lu renderLevel=%lu injects=%lu restores=%lu injectFail=%lu want(pos=%.1f,%.1f,%.1f rel=%d)",
+                "%s override=%d update=%lu renderLevel=%lu tick=%lu setter=%lu writes=%lu injectFail=%lu want(pos=%.1f,%.1f,%.1f rel=%d)",
                 tag, g_override.load() ? 1 : 0, g_diagUpdate.load(), g_diagRenderLevel.load(),
-                g_diagWrites.load(), g_diagRestores.load(), g_diagInjectFail.load(),
+                g_diagTick.load(), g_diagSetter.load(), g_diagWrites.load(), g_diagInjectFail.load(),
                 r.px, r.py, r.pz, r.relativePos ? 1 : 0);
   flog(b);
 }
 
-// ---- direct LevelRendererPlayer position override (v1.3) ----------------------------------
-// The renderer keeps the live camera position as a float3 at LevelRendererPlayer + 0x614
-// (verified live on device: "renderer camera pos (LRP+0x614)" tracks the world camera every
-// frame). v1.2's entt/CameraComponent path found nothing on Android (writes=0, probe failed
-// every frame), so the override is written straight into the renderer's own struct:
-//   BEFORE orig render: snapshot the 12 bytes, write our XYZ (relative: live pos + offset,
-//                       fixed: absolute world position);
-//   AFTER  orig render: restore the snapshot byte-for-byte.
-std::array<unsigned char, 12> g_posSnapshot{};  // original camera position bytes
-void* g_injectedLrp = nullptr;                  // LRP that received our write (for restore)
-
-bool injectCameraPos(void* renderer) {
-  if (!renderer || !memMapped(static_cast<char*>(renderer) + off::LevelRenderer_mLevelRendererPlayer, 8)) {
-    g_diagInjectFail.fetch_add(1, std::memory_order_relaxed);
-    return false;
-  }
-  void* lrp = *reinterpret_cast<void**>(static_cast<char*>(renderer) + off::LevelRenderer_mLevelRendererPlayer);
+// ---- direct LevelRendererPlayer position override (v1.4) ----------------------------------
+// Device REZ (user's Zaphkiel dump): fn_0xb7d4274 (CamTick) WRITES the pose every frame;
+// fn_0xb7c7268 (CamSetter) funnels immediate packet poses. v1.4 overwrites ONLY the 12-byte
+// float3 at LRP+0x614 AFTER the original ran - vanilla rewrites +0x614 every tick, so OFF
+// needs no restore logic at all.
+bool applyCamOverride(void* lrp) {
   if (!lrp || !memMapped(static_cast<char*>(lrp) + off::LevelRendererPlayer_mCamPos, 12)) {
     g_diagInjectFail.fetch_add(1, std::memory_order_relaxed);
     return false;
@@ -279,49 +283,31 @@ bool injectCameraPos(void* renderer) {
   PovRequest r{};
   { std::lock_guard<std::mutex> lk(g_mu); r = g_req; }
   float target[3];
-  if (r.relativePos) {
-    target[0] = cur[0] + r.px;
-    target[1] = cur[1] + r.py;
-    target[2] = cur[2] + r.pz;
-  } else {
-    target[0] = r.px;
-    target[1] = r.py;
-    target[2] = r.pz;
-  }
-  std::memcpy(g_posSnapshot.data(), cur, sizeof cur);
+  composeCamPos(r, cur, target);
   std::memcpy(static_cast<char*>(lrp) + off::LevelRendererPlayer_mCamPos, target, sizeof target);
-  g_injectedLrp = lrp;
   g_diagWrites.fetch_add(1, std::memory_order_relaxed);
   static std::atomic<bool> firstInjectLog{false};
   if (!firstInjectLog.exchange(true)) {
     char b[256];
     std::snprintf(b, sizeof b,
-                  "inject: FIRST direct LRP pos write cur=(%.3f,%.3f,%.3f) target=(%.3f,%.3f,%.3f) rel=%d",
+                  "override: FIRST LRP+0x614 write cur=(%.3f,%.3f,%.3f) target=(%.3f,%.3f,%.3f) rel=%d",
                   cur[0], cur[1], cur[2], target[0], target[1], target[2], r.relativePos ? 1 : 0);
     flog(b);
   }
   return true;
 }
 
-void restoreCameraPos() {
-  void* lrp = g_injectedLrp;
-  g_injectedLrp = nullptr;
-  if (!lrp) return;
-  if (!memMapped(static_cast<char*>(lrp) + off::LevelRendererPlayer_mCamPos, 12)) {
-    flog("restore: LRP no longer mapped - cannot restore original camera pos");
-    return;
-  }
-  std::memcpy(static_cast<char*>(lrp) + off::LevelRendererPlayer_mCamPos, g_posSnapshot.data(), 12);
-  g_diagRestores.fetch_add(1, std::memory_order_relaxed);
-}
-
 // ---- frame hooks -------------------------------------------------------------------------
 using UpdatePlayerFromCameraFn = void (*)(void*, void*, void*);
 using TurnDeltaFn = void (*)(void*, void*);
 using RenderLevelFn = void (*)(void*, void*, void*);
+using CamTickFn = void (*)(void*, void*);    // fn_0xb7d4274(this=LRP, flagHolder)
+using CamSetterFn = void (*)(void*, void*);  // fn_0xb7c7268(this=LRP, poseIn)
 UpdatePlayerFromCameraFn g_origUpdatePlayer = nullptr;
 TurnDeltaFn g_origTurnDelta = nullptr;
 RenderLevelFn g_origRenderLevel = nullptr;
+CamTickFn g_origTick = nullptr;
+CamSetterFn g_origSetter = nullptr;
 
 void updatePlayerDetour(void* camera, void* component, void* player) {
   g_diagUpdate.fetch_add(1, std::memory_order_relaxed);
@@ -343,11 +329,39 @@ void updatePlayerDetour(void* camera, void* component, void* player) {
 
 void turnDeltaDetour(void* player, void* delta) {
   if (player) g_player.store(player, std::memory_order_release);
-  // v1.3: pass-through. The view is free (look works normally); only the camera position
-  // is pinned at render time. The hook stays installed so toggling is cheap and the
+  // Pass-through (since v1.3). The view is free (look works normally); only the camera
+  // position is pinned by the CamTick/CamSetter detours. The hook stays installed so toggling is cheap and the
   // install log keeps its shape.
   crash::setStage("turnDelta:original");
   if (g_origTurnDelta) g_origTurnDelta(player, delta);
+}
+
+void camTickDetour(void* lrp, void* flagHolder) {
+  g_diagTick.fetch_add(1, std::memory_order_relaxed);
+  static std::atomic<bool> firstTick{false};
+  if (!firstTick.exchange(true)) {
+    char b[256];
+    std::snprintf(b, sizeof b, "camTickDetour FIRST call: lrp=%p flagHolder=%p", lrp, flagHolder);
+    flog(b);
+  }
+  if (g_origTick) g_origTick(lrp, flagHolder);
+  if (!g_override.load(std::memory_order_acquire)) return;
+  crash::setStage("tick:override");
+  applyCamOverride(lrp);
+}
+
+void camSetterDetour(void* lrp, void* pose) {
+  g_diagSetter.fetch_add(1, std::memory_order_relaxed);
+  static std::atomic<bool> firstSetter{false};
+  if (!firstSetter.exchange(true)) {
+    char b[256];
+    std::snprintf(b, sizeof b, "camSetterDetour FIRST call: lrp=%p pose=%p", lrp, pose);
+    flog(b);
+  }
+  if (g_origSetter) g_origSetter(lrp, pose);
+  if (!g_override.load(std::memory_order_acquire)) return;
+  crash::setStage("setter:override");
+  applyCamOverride(lrp);
 }
 
 void renderLevelDetour(void* renderer, void* context, void* view) {
@@ -373,29 +387,23 @@ void renderLevelDetour(void* renderer, void* context, void* view) {
     }
   }
 
-  const bool want = g_override.load(std::memory_order_acquire);
-  bool injected = false;
-  if (want) {
-    crash::setStage("renderLevel:inject");
-    injected = injectCameraPos(renderer);
-    crash::setStage("renderLevel:orig");
-  }
+  // v1.4: no writes here - the CamTick/CamSetter hooks own the pose override. This hook
+  // stays installed for the live "renderer camera pos" log (shows our overridden value).
+  crash::setStage("renderLevel:orig");
   if (g_origRenderLevel) g_origRenderLevel(renderer, context, view);
-  if (injected) {
-    crash::setStage("renderLevel:restore");
-    restoreCameraPos();
-  }
 }
 
 // ---- lifecycle ---------------------------------------------------------------------------
-struct Resolved { uintptr_t updatePlayerFromCamera = 0, localPlayerApplyTurnDelta = 0, renderLevel = 0; };
+struct Resolved { uintptr_t updatePlayerFromCamera = 0, localPlayerApplyTurnDelta = 0, renderLevel = 0, camTick = 0, camSetter = 0; };
 Resolved g_resolved;
 
 bool resolveSignatures() {
   const std::string lib(kLibName);
   const std::vector<std::string> patterns = {std::string(kSigUpdatePlayerFromCamera),
                                              std::string(kSigLocalPlayerApplyTurnDelta),
-                                             std::string(kSigRenderLevel)};
+                                             std::string(kSigRenderLevel),
+                                             std::string(kSigCamTick),
+                                             std::string(kSigCamSetter)};
   const auto found = pl::memory::resolveSignatures(patterns, lib.c_str());
   auto get = [&](std::string_view p) -> uintptr_t {
     const auto it = found.find(std::string(p));
@@ -404,6 +412,8 @@ bool resolveSignatures() {
   g_resolved.updatePlayerFromCamera = get(kSigUpdatePlayerFromCamera);
   g_resolved.localPlayerApplyTurnDelta = get(kSigLocalPlayerApplyTurnDelta);
   g_resolved.renderLevel = get(kSigRenderLevel);
+  g_resolved.camTick = get(kSigCamTick);
+  g_resolved.camSetter = get(kSigCamSetter);
   return g_resolved.updatePlayerFromCamera != 0 && g_resolved.localPlayerApplyTurnDelta != 0;
 }
 
@@ -412,6 +422,14 @@ void unhookAll() {
   if (g_origRenderLevel) {
     pl::memory::unhook(reinterpret_cast<void*>(g_resolved.renderLevel), reinterpret_cast<void*>(renderLevelDetour));
     g_origRenderLevel = nullptr;
+  }
+  if (g_origTick) {
+    pl::memory::unhook(reinterpret_cast<void*>(g_resolved.camTick), reinterpret_cast<void*>(camTickDetour));
+    g_origTick = nullptr;
+  }
+  if (g_origSetter) {
+    pl::memory::unhook(reinterpret_cast<void*>(g_resolved.camSetter), reinterpret_cast<void*>(camSetterDetour));
+    g_origSetter = nullptr;
   }
   if (g_origUpdatePlayer) {
     pl::memory::unhook(reinterpret_cast<void*>(g_resolved.updatePlayerFromCamera), reinterpret_cast<void*>(updatePlayerDetour));
@@ -444,7 +462,9 @@ void watchLoop() {
       flog("SIGNATURE RESOLUTION FAILED - Screen POV stays INACTIVE (check the log for the missing one)");
     if (!g_resolved.updatePlayerFromCamera) flog("  missing: UpdatePlayerFromCamera");
     if (!g_resolved.localPlayerApplyTurnDelta) flog("  missing: LocalPlayerApplyTurnDelta");
-    if (!g_resolved.renderLevel) flog("  missing: RenderLevel (degraded: pose pin only, no camera drive)");
+    if (!g_resolved.renderLevel) flog("  missing: RenderLevel (diagnostic log lost; pose drive unaffected)");
+    if (!g_resolved.camTick) flog("  missing: CamTick (fn_0xb7d4274) - the camera WILL NOT move");
+    if (!g_resolved.camSetter) flog("  missing: CamSetter (fn_0xb7c7268) - packet pose path not overridden");
       return;
     }
     crash::setStage("hooks");
@@ -459,15 +479,30 @@ void watchLoop() {
                         : pl::memory::hook(reinterpret_cast<void*>(g_resolved.renderLevel),
                                            reinterpret_cast<void*>(renderLevelDetour),
                                            reinterpret_cast<void**>(&g_origRenderLevel)) == 0;
+    const bool r5 = !g_resolved.camTick
+                        ? false
+                        : pl::memory::hook(reinterpret_cast<void*>(g_resolved.camTick),
+                                           reinterpret_cast<void*>(camTickDetour),
+                                           reinterpret_cast<void**>(&g_origTick)) == 0;
+    const bool r6 = !g_resolved.camSetter
+                        ? false
+                        : pl::memory::hook(reinterpret_cast<void*>(g_resolved.camSetter),
+                                           reinterpret_cast<void*>(camSetterDetour),
+                                           reinterpret_cast<void**>(&g_origSetter)) == 0;
     flog(std::string("hooks install: UpdatePlayerFromCamera=") + (r2 ? "ok" : "FAILED") +
          " LocalPlayerApplyTurnDelta=" + (r3 ? "ok" : "FAILED") +
-         " RenderLevel=" + (g_resolved.renderLevel ? (r4 ? "ok" : "FAILED") : "skipped (sig missing)"));
+         " RenderLevel=" + (g_resolved.renderLevel ? (r4 ? "ok" : "FAILED") : "skipped (sig missing)") +
+         " CamTick=" + (g_resolved.camTick ? (r5 ? "ok" : "FAILED") : "MISSING (sig not found)") +
+         " CamSetter=" + (g_resolved.camSetter ? (r6 ? "ok" : "FAILED") : "MISSING (sig not found)"));
     flog(std::string("sig UpdatePlayerFromCamera: ") + std::string(kSigUpdatePlayerFromCamera));
     flog(std::string("sig LocalPlayerApplyTurnDelta: ") + std::string(kSigLocalPlayerApplyTurnDelta));
     flog(std::string("sig RenderLevel: ") + std::string(kSigRenderLevel));
+    flog(std::string("sig CamTick: ") + std::string(kSigCamTick));
+    flog(std::string("sig CamSetter: ") + std::string(kSigCamSetter));
     g_hooksInstalled.store(r2 && r3);
     if (r2 && r3) crash::setStage("ready");
-    if (!r4) flog("WARNING: RenderLevel hook missing - the view will stay frozen like v1.1 (no pose drive)");
+    if (!r5) flog("WARNING: CamTick hook missing/failed - the camera WILL NOT move on-device (CamSetter alone covers only packet poses)");
+    if (!r4) flog("WARNING: RenderLevel diagnostic hook missing (pose drive unaffected)");
     return;
   }
 }
@@ -489,7 +524,7 @@ void bridgeInit(const std::string& dataDir) {
   crash::install();
   LibMap lib;
   if (findLib(lib)) crash::setLib(lib.base, lib.size);
-  flog(std::string("---- Screen POV v1.3.0 start  log: ") + g_log.path);
+  flog(std::string("---- Screen POV v1.4.0 start  log: ") + g_log.path);
   crash::setStage("load");
   g_stop.store(false);
   g_thread = std::thread(&watchLoop);

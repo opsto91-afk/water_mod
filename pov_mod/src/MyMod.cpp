@@ -1,4 +1,4 @@
-// MyMod.cpp - "Screen POV" v1.3.0  (LeviLauncher native mod, Preloader SDK `pl::` API)
+// MyMod.cpp - "Screen POV" v1.4.0  (LeviLauncher native mod, Preloader SDK `pl::` API)
 //
 //   A small, standalone camera-only mod: set your own camera position from the in-game Mod Menu.
 //   Mod Menu -> "Screen POV":
@@ -10,14 +10,15 @@
 //                               + (X, Y, Z) - follows you as you move. Fixed mode (Relative OFF):
 //                               camera = exact world coordinates (X, Y, Z) - stays put.
 //     * "Relative to player"  - toggle between the two position modes
-//     * "Yaw / Pitch / Roll"  - inert in v1.3 (orientation is vanilla; you look around normally).
+//     * "Yaw / Pitch / Roll"  - inert in v1.4 (orientation is vanilla; you look around normally).
 //                               Sliders kept so old pov.cfg files still load.
-//     * "Invert yaw / pitch"  - inert in v1.3 (kept for compatibility).
+//     * "Invert yaw / pitch"  - inert in v1.4 (kept for compatibility).
 //     * "Snap to game view"   - offsets := 0, relative mode ON (vanilla view, offset zero)
 //     * "Live (release camera)" - hands the camera straight back to the game
 //   Camera = screen POV only. The player's body is NEVER touched (no physics/rotation/movement).
 //   Log: .../org.levimc.launcher/kurumi/pov_mod.log (fallback: the mod's data dir).
-//   v1.3 writes the camera POSITION straight into the renderer's struct (no ECS/entt);
+//   v1.4 writes the camera POSITION AFTER the renderer's per-frame pose writer runs
+//   (CamTick hook), so the override always sticks; no ECS/entt anywhere;
 //   v1.2's CameraComponent path found nothing on Android and injected zero frames.
 #include <pl/Mod.hpp>
 #include <pl/ModMenu.hpp>
@@ -151,11 +152,11 @@ class ScreenPovMod {
             .onConfigChanged([](std::string_view, std::string_view key, std::string_view value) {
               ScreenPovMod::instance().onConfig(key, value);
             })
-            .config("pov_yaw", "Yaw (inert in v1.3 - orientation is vanilla)",
+            .config("pov_yaw", "Yaw (inert in v1.4 - orientation is vanilla)",
                     pl::modmenu::ConfigType::SliderFloat, std::to_string(c.yaw), "-180", "180")
-            .config("pov_pitch", "Pitch (inert in v1.3 - orientation is vanilla)",
+            .config("pov_pitch", "Pitch (inert in v1.4 - orientation is vanilla)",
                     pl::modmenu::ConfigType::SliderFloat, std::to_string(c.pitch), "-90", "90")
-            .config("pov_roll", "Roll (inert in v1.3 - orientation is vanilla)",
+            .config("pov_roll", "Roll (inert in v1.4 - orientation is vanilla)",
                     pl::modmenu::ConfigType::SliderFloat, std::to_string(c.roll), "-180", "180")
             .config("pos_x", "Offset X (relative) / X (absolute)",
                     pl::modmenu::ConfigType::SliderFloat, std::to_string(c.px), "-20", "20")
@@ -165,9 +166,9 @@ class ScreenPovMod {
                     pl::modmenu::ConfigType::SliderFloat, std::to_string(c.pz), "-20", "20")
             .config("relative", "Relative to player (off = world position)",
                     pl::modmenu::ConfigType::Toggle, c.relative ? "true" : "false")
-            .config("invert_yaw", "Invert yaw (inert in v1.3)",
+            .config("invert_yaw", "Invert yaw (inert in v1.4)",
                     pl::modmenu::ConfigType::Toggle, c.invertYaw ? "true" : "false")
-            .config("invert_pitch", "Invert pitch (inert in v1.3)",
+            .config("invert_pitch", "Invert pitch (inert in v1.4)",
                     pl::modmenu::ConfigType::Toggle, c.invertPitch ? "true" : "false")
             .config("snap_view", "Snap to game view (copy live view)", pl::modmenu::ConfigType::Button)
             .config("live_release", "Live (release camera back to game)", pl::modmenu::ConfigType::Button)
@@ -249,7 +250,7 @@ class ScreenPovMod {
     flog(std::string("menu: ") + std::string(key) + " = " + std::string(value));
   }
 
-  // Resets the override to vanilla view (zero offsets, relative mode). v1.3: pos-only.
+  // Resets the override to vanilla view (zero offsets, relative mode). v1.4: pos-only.
   void snapToGameView() {
     Pose eye{};
     if (!readPlayerEye(eye)) {
