@@ -14,7 +14,9 @@ permissions:
 jobs:
   pov-mod:
     name: Build Screen POV mod (from pov_mod/)
-    runs-on: ubuntu-latest
+    # ubuntu-26 image (new ubuntu-latest) broke the pinned NDK setup in Nov 2026 -
+    # the build died instantly at the toolchain file. Pin the LTS image that works.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Install build tools
@@ -29,6 +31,15 @@ jobs:
           packages: "ndk;27.2.12479018"
       - name: Configure NDK path
         run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+      - name: Preflight NDK check
+        run: |
+          if [ ! -f "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" ]; then
+            echo "::error::NDK toolchain missing at $ANDROID_NDK_HOME - setup-android did not install ndk;27.2.12479018 on this image"
+            ls -la "$ANDROID_HOME" || true
+            ls -la "$ANDROID_HOME/ndk" || true
+            exit 1
+          fi
+          echo "NDK toolchain OK: $ANDROID_NDK_HOME"
       - name: Build pov_mod.levipack
         run: |
           cd pov_mod
