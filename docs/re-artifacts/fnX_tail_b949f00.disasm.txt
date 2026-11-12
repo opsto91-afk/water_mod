@@ -1,0 +1,51 @@
+; fnX tail — libminecraftpe.so vaddr 0xb949f00..0xb94a070 (captured 2026-11-12)
+; /tmp was wiped; bytes reconstructed from the disassembler output taken the same day.
+; Disassembled with capstone (aarch64 little-endian). VA == file offset (seg0 identity map).
+
+0x0b949f00  and          x9, x8, #0x3ff80
+0x0b949f04  ldr          x10, [x20, #0x50]
+0x0b949f08  lsr          x9, x9, #4
+0x0b949f0c  b            #0xb949f34
+0x0b949f10  add          x1, sp, #0x18          ; secondary entry (from tbz skip)
+0x0b949f14  mov          x0, x20
+0x0b949f18  mov          w2, wzr
+0x0b949f1c  str          w21, [sp, #0x18]
+0x0b949f20  bl           #0x8a7a3cc
+0x0b949f24  sub          x8, x1, #1
+0x0b949f28  ldr          x10, [x20, #0x50]
+0x0b949f2c  lsr          x9, x8, #4
+0x0b949f30  and          x9, x9, #0xffffffffffffff8
+0x0b949f34  ldr          x9, [x10, x9]
+0x0b949f38  and          x8, x8, #0x7f
+0x0b949f3c  mov          x0, x19
+0x0b949f40  add          x8, x9, x8, lsl #3
+0x0b949f44  ldr          x9, [sp, #8]           ; saved 304-byte component base
+0x0b949f48  ldr          d0, [x9, #0x120]       ; POSE DOUBLE from component+0x120
+0x0b949f4c  add          x1, x9, #0x120         ; double* argument
+0x0b949f50  str          d0, [x8]               ; *** WRITE into 0x31A824ED pool slot (entity=x21) ***
+0x0b949f54  bl           #0xfd8f694
+0x0b949f58  ldr          x22, [sp, #0x10]
+0x0b949f5c  ldr          x8, [x22, #0x28]       ; shared exit
+0x0b949f60  ldur         x9, [x29, #-8]
+0x0b949f64  cmp          x8, x9
+0x0b949f68  b.ne         #0xb949f84
+0x0b949f6c  ldp          x20, x19, [sp, #0x70]
+0x0b949f70  ldr          x23, [sp, #0x50]
+0x0b949f74  ldp          x22, x21, [sp, #0x60]
+0x0b949f78  ldp          x29, x30, [sp, #0x40]
+0x0b949f7c  add          sp, sp, #0x80
+0x0b949f80  ret
+0x0b949f84  bl           #0x135df9a0            ; stack-protect fail path
+; ... continues into a 0xb0-byte copy-constructor-shaped routine (vector/string members),
+;     likely the tail of the preceding/following inlined function — not analysed.
+
+; =====================================================================
+; fnX summary (2026-11-12):
+;   entry 0xb949c0c (preceded by tail of prior fn at 0xb949c00..c08)
+;   entt-gated: component family hash 0x62A6B9C (stride 0x130, flag byte @+0x11d)
+;   gate chain: 0xaf5d23c -> 0x9c706c0 -> 0x1346923c (tbz w0,#0 -> skip @0xb949f5c)
+;   hash 0xfd83aa62 pool, vtable+0x100 dispatch, predicate 0x10be277c
+;   then the SAME two double-hash pool reads as headGet (0x02C74480 -> bl 0x9f343c8;
+;     0x31A824ED -> bl 0x8a796b8)
+;   WRITES d0 (component+0x120) into the 0x31A824ED pool slot for entity x21.
+; =====================================================================

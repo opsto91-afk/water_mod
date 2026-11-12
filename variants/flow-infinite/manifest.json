@@ -1,0 +1,10 @@
+{
+  "type": "preload-native",
+  "name": "Infinite Flow",
+  "author": "you",
+  "version": "0.1.0",
+  "entry": "libinfinite_flow.so",
+  "minecraft_versions": [],
+  "overwrite_files": [],
+  "overwrite_folders": []
+}
