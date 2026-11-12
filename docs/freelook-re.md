@@ -432,13 +432,19 @@ This was in the uploads all along; analysed now. THE definitive v1.2 failure evi
   dump + match against menu-set known yaw (0/90/180/-90) at screenshot time.
 
 Logs: /tmp/arena-coding-uploads/pov_mod.log (device log, 25 KB, 3 sessions v1.0/1.1/1.2).
-## Phase 8 (2026-11-13) — USER'S zaphkiel zip: THE camera position writer FOUND
+## Phase 8 (2026-11-13) — zaphkiel dump analysis (SHIPPED AS v1.4 — FAILED ON DEVICE; see v1.4 postmortem)
+
+> **DISCLAIMER (added after the device failure): the conclusion "fn_0xb7d4274 is THE
+> camera-pose writer of LevelRendererPlayer" was NEVER verified.** The dumps show a float3
+> stored at `this+0x614`, but object identity was assumed, never confirmed (no ctor/vtable
+> cross-ref). On device the writes corrupted movement/attack controls — `this` is not (only)
+> the LRP. Kept below for the record; do NOT build from this phase again as-is.
 
 User ethstruct'd the 0xb7a-b7d render module (+0x614 consumers/writers) and uploaded
 `1.zip` (302 FC targets, 149 .c dumps, zaphkiel_out.txt) to repo root on main; v1.3.0
 (direct LRP+0x614 write around RenderLevel) does NOT move the view on device.
 
-### fn_0xb7d4274 — the LRP+0x614 ease/tick (THE hook target for v1.4)
+### fn_0xb7d4274 — the `this+0x614` ease/tick (v1.4 hook target — REFUTED on device)
 - tpidr_el0 stack-protect prologue; args (x0=this=r19, x1=r21 flag-holder, byte @r21+0x4e);
   global enable gate at 0x1407f080; global state at [0x1407f080..]+0x160 (r22) + byte flags — skips if disabled.
 - Reads desired/blend target from r19+0x5d8/0x5dc/0x5e0 (float3) and cached target r19+0x5e4/0x5ec;
@@ -448,7 +454,7 @@ User ethstruct'd the 0xb7a-b7d render module (+0x614 consumers/writers) and uplo
 - Cached target update at r19+0x5e4/0x5ec (+fn_0xb7a9068 notify if changed).
 - END STORE (label_0xb7d46d0): r19+0x614 <- float3 (sp+0x5c) — the value the renderer reads;
   + 0x61c/0x620/0x628 (d7c/d84 region) — more pose/FOV state (NOT position; leave untouched).
-- => v1.3 wrote BEFORE RenderLevel; the view matrix is built at/before this fn — v1.3 was too late.
+- => (v1.3 wrote BEFORE RenderLevel; the view matrix is built at/before this fn — v1.3 was too late.) NOTE: this whole chain of reasoning was shaken by the v1.4 failure; frame order unknown.
 
 ### Other +0x614 sites (secondary; NOT to hook)
 - fn_0xb7c7268: struct-copy fn — copies r19+0x8/0x10/0x14 into r20+0x614/0x61c/0x620 (set-pose API / jump cut).
@@ -470,3 +476,46 @@ User ethstruct'd the 0xb7a-b7d render module (+0x614 consumers/writers) and uplo
    CamSetter = fn_0xb7c7268 (14 insns, UNIQUE, quality 543). Both wired as AOB (pl::memory).
 4. zaphkiel abs-dump addresses == .so vaddr (identity map seg0 confirmed earlier); AOB sigs used
    instead of raw va for portability. Local host tests PASS (composeCamPos added to PovCore).
+
+---
+
+## v1.4 postmortem (2026-11-13) — build SHIPPED AND FAILED ON DEVICE
+
+v1.4 wrapped fn_0xb7d4274 ("CamTick" sig: `FF C3 06 D1 EA A3 00 FD ...` matches=1 q515)
+and fn_0xb7c7268 ("CamSetter" sig: `FD 7B BE A9 F4 4F 01 A9 ...` matches=1 q543), and
+after the original ran overwrote the 12-byte float3 at `this+0x614` (relative: live+offset,
+absolute world XYZ), keeping the UpdatePlayerFromCamera skip and TurnDelta pass-through.
+
+**On-device result (user report):** the camera never moved; the movement/attack controls
+were corrupted — joystick mirrored ("aage jata hai to peeche, left pe right, aage pe
+right bhi") and the attack button behaves reversed. Install = uninstalled the game feel.
+
+**Root-cause verdict:** the object `this` in fn_0xb7d4274 / fn_0xb7c7268 is NOT (only) the
+renderer's LevelRendererPlayer. The shared `+0x614` float3 was assumed to be the camera
+pose in BOTH structs without verifying object identity (no ctor/vtable cross-ref was ever
+checked for these two functions). The writes steamrolled an input/movement-consumed
+float3. Secondary risk: both detours were typed `void(*)(void*,void*)` — if the real
+functions return non-void, the wrappers leave garbage in `x0` for callers.
+
+**Process failure that made it bad:** the Zaphkiel dump analysis (148 fns) lived only at
+`/home/user/re_user/` OUTSIDE the repository; a sandbox reset deleted the dumps AND
+CAMERA-RE-NOTES.md before any of it was verified on device. Lesson: all RE artifacts and
+notes belong INSIDE the repo (`docs/`, `docs/re-artifacts/`) — hence everything here.
+
+**Resolution (v1.5.0 SAFE, same day):** removed ALL writes and ALL behavioral hooks.
+Only a read-only RenderLevel diagnostic remains (pass-through, logs `renderer+0x430 ->
+LRP+0x614` every ~2 s). Menu stripped to X/Y/Z + Relative + Reset (saved, inert).
+Game is 100% vanilla again. NO MORE BUILDS OF THE OVERRIDE until the pose consumer is
+identified and verified on device, in this order:
+  1. Re-dump fn_0xb7d4274 / fn_0xb7c7268 AND their callers (who passes `this` = the
+     camera object?). The caller set defines the class.
+  2. Confirm frame order: who READS LRP+0x614 and when, relative to RenderLevel and to
+     the writer (both write points failed: v1.3 pre-orig RenderLevel = static view;
+     v1.4 post-CamTick = broken controls).
+  3. Only then ship a write build, and gate it behind a log line that prints the live
+     LRP float3 each second so the first device run is self-verifying.
+Also still open: whether v1.3's "static screen" was frame-order (writer runs after
+RenderLevel) or the same wrong-object bug — the v1.4 chaos makes v1.3's result
+inconclusive. Evidence to request from the user when possible: kurumi/pov_mod.log from
+the v1.4 session (contains "override: FIRST LRP+0x614 write cur=... target=..." and the
+periodic "renderer camera pos" lines).

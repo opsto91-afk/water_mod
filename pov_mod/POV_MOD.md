@@ -1,78 +1,75 @@
-# Screen POV v1.4.0 (LeviLauncher native mod)
+# Screen POV v1.5.0 (LeviLauncher native mod) — SAFE BUILD
 
-Standalone, **camera-position-only** mod — separate from the Water Tweaks mod and from the V4 Cine Mod.
-Everything is set from the in-game Mod Menu; no file editing required.
+> **v1.5.0 does NOT move the camera.** It exists to (1) return your game to a
+> 100% unbroken state and (2) keep only the XYZ settings. The camera override is
+> disabled until the pose-consumer RE is finished and verified on device.
 
-> v1.4 has one job: **put the camera exactly where you want it (XYZ).**
-> Your look (mouse/touch) stays 100% vanilla, and the player's body is never touched.
-> Yaw/pitch/roll sliders are inert in v1.4 (orientation is vanilla).
+## Why
 
-## Usage (in game)
+v1.4 (2026-11-13) hooked two functions taken from static dumps of this build
+(`fn_0xb7d4274` / `fn_0xb7c7268`, on the theory they write the renderer's pose
+float3). On device, with the dump-derived theory unverified beyond the disasm:
 
-1. Import `pov_mod.levipack` in LeviLauncher and enable the mod.
-2. Mod Menu (floating button) → **Screen POV**.
-3. Toggle **Screen POV** ON → the camera position is overridden every frame as configured below.
-   Toggle OFF → the camera goes straight back to the game (always the safe state).
-4. **Offset X / Y / Z** — two modes (see the **Relative to player** toggle):
-   * **Relative ON (default)** — the camera sits at the player's live camera position **+ (X, Y, Z)**
-     and follows the player as they move (e.g. `Y=4` = a constant 4-block height boost).
-   * **Relative OFF** — the camera is pinned to the exact world coordinates **(X, Y, Z)** and
-     stays there while you walk around (spectator/drone style).
-5. **Snap to game view** — zero the offsets and re-enable relative mode (vanilla view with zero offset).
-6. **Live (release camera)** — hand the camera straight back to the game (same as toggle OFF).
-7. Yaw / Pitch / Roll / Invert yaw / Invert pitch sliders are **inert in v1.4** (kept so old
-   `pov.cfg` files still load).
+* the camera **never moved**, and
+* the player **movement / attack controls broke** — the joystick was mirrored
+  ("forward walks back, left walks right, forward also drifts right") and the
+  attack button behaved reversed.
 
-Values persist in `pov.cfg` in the mod's data dir. Log:
-`Android/media/org.levimc.launcher/kurumi/pov_mod.log` (fallback: the mod's data dir).
+Conclusion: the object those functions operate on is **not** (only) the renderer
+camera pose — or the writes landed in a component the input/movement system
+consumes. The hooks were removed in v1.5.0.
 
-## How it drives the camera (v1.4)
+## What v1.5.0 does
 
-Built from the user's **on-device reverse engineering** (Zaphkiel pseudo-C dumps of the exact
-`libminecraftpe.so` on the test device, 2026-11-13). The dumps identified the two functions
-that write the renderer's pose float3 at `LRP+0x614`:
+* **Zero writes to game memory — ever.**
+* The ONLY hook is `RenderLevel` (60.4 sig Freelook uses) as a **read-only,
+  100% pass-through** diagnostic: every ~2 s it logs the live camera float3
+  (`renderer+0x430 → LRP+0x614`) to `pov_mod.log`.
+* `UpdatePlayerFromCamera` / `LocalPlayerApplyTurnDelta` are **not** hooked.
+* Mod Menu -> "Screen POV": **X / Y / Z sliders + Relative-to-player toggle +
+  Reset to vanilla** — all SAVED but **inert** (they take effect only once the
+  fixed camera build ships).
+* All legacy sliders (Yaw / Pitch / Roll / Invert yaw / Invert pitch) are gone;
+  old `pov.cfg` orientation keys are accepted and ignored.
+* Crash tracer + `pov_mod.log` (Kurumi path) kept.
 
-| Hook | Behaviour while override is ON |
-|---|---|
-| `UpdatePlayerFromCamera` (same 60.4 sig as Freelook) | original **skipped** — the body never syncs from the camera |
-| `LocalPlayerApplyTurnDelta` (same 60.4 sig as Freelook) | **pass-through** — you look around normally |
-| `RenderLevel` (same 60.4 sig as Freelook) | **diagnostic only** — logs the live `LRP+0x614` value (now shows OUR value); no writes |
-| `CamTick` = `fn_0xb7d4274` (on-device sig, 14 insns, UNIQUE) | the **per-frame pose writer** (eases/notifies/posts `moveRenderingArea` and WRITES the float3 at `+0x614..+0x61f` every frame). Wrapped: **original first**, then — only while ON — the 12-byte position float3 is overwritten (relative: live pose + offset; fixed: absolute world XYZ). Orientation/FOV bytes (`+0x620..+0x633`) are untouched. |
-| `CamSetter` = `fn_0xb7c7268` (on-device sig, 14 insns, UNIQUE) | the **immediate pose-set funnel** (packet/script `/camera` path). Same post-orig overwrite — covers camera instructions too. |
+## Install over v1.4
 
-Why v1.3 failed on device: it injected its XYZ **before** the original `RenderLevel` ran, and
-the CamTick then **overwrote `+0x614` with vanilla's eased pose** later in the frame — the view
-never moved. v1.4 writes **after** the writer runs, so every consumer (view matrix, reactive
-pose listeners) sees our value while the override is ON.
+1. Remove/overwrite `screen_pov` from the launcher (or delete the old
+   `pov_mod.levipack`), import this build, start the game.
+2. Delete the old `pov.cfg` in the mod's data dir if you want a clean config
+   (orientation values are ignored anyway).
+3. Check `Android/media/org.levimc.launcher/kurumi/pov_mod.log` — the first line
+   says `Screen POV v1.5.0 start` and `SAFE MODE: camera override DISABLED`.
+4. Your controls will behave **exactly like vanilla Minecraft**.
 
-Vanilla rewrites `+0x614` on every tick, so switching the mod **OFF needs no restore hack** —
-toggle OFF and the very next frame is pure vanilla again.
+## Honest status
 
-### Honest status
-
-* **v1.4 is UNTESTED ON DEVICE.** It is built from on-device RE of this exact build, and the
-  write now happens **after** the pose writer runs. What to check on device:
-  1. `pov_mod.log` shows `hooks install: ... CamTick=ok CamSetter=ok` shortly after launch.
-  2. The `tick=` counter keeps growing (≈60/s while in-game).
-  3. `camTickDetour FIRST call: lrp=...` and `override: FIRST LRP+0x614 write cur=... target=...`
-     appear within a frame or two of switching the toggle ON.
-  4. **The view jumps** to the configured XYZ / offset while the game keeps running normally;
-     toggling OFF returns vanilla view within a frame.
-* If `CamTick=ok` but the view still doesn't move, paste the log — the next step is to also
-  pin whatever else caches the pose (e.g. the atomic pose slot at `this+0x978 → +0xa88`, or a
-  view-matrix snapshot taken earlier in the frame). This is a one-function addition, not a redesign.
-* CamTick/CamSetter signatures are on-device unique for this build (matches=1, quality ≥515);
-  the three BedrockTools 60.4 sigs cover the rest (MC 1.26.52).
+* **The POV camera does NOT work in v1.5.0.** This is deliberate: no unverified
+  writes reach the game.
+* What is still known-good: the renderer camera position float3 at
+  `LRP+0x614` is readable and tracks the world camera correctly (v1.2/v1.4
+  logs). A future build must pin the pose **where the renderer actually reads
+  it each frame** — but BOTH known write points failed on device already
+  (RenderLevel-before-orig = static screen in v1.3; post-`fn_0xb7d4274` = broken
+  controls in v1.4), so the frame order / target object must be pinned down
+  FIRST, with on-device confirmation, before any write ships again.
+* Every artifact from the dump session lived outside the repository and was lost
+  when a sandbox reset wiped it; the remaining RE notes are in
+  `docs/freelook-re.md` (including the v1.4 postmortem).
+* Next step needs **on-device verification only**: no blind rebuilds. Either
+  re-dump the camera subsystem (the two `0xb7d4xxx/0xb7c7xxx` functions and the
+  callers that pass `this` = the camera object), or paste `pov_mod.log` from the
+  v1.4 session (it contains the `override: FIRST LRP+0x614 write ...` and the
+  periodic `renderer camera pos` lines) — that log alone will show whether the
+  renderer ever consumed our values.
 
 ## Build
 
-CI (this repository): the **Screen POV Build** workflow (job `pov-mod`) produces the `screen_pov` artifact
-(`pov_mod.levipack`) on every push. Locally:
+CI (this repository): the **Screen POV Build** workflow (job `pov-mod`) produces
+the `screen_pov` artifact (`pov_mod.levipack`) on every push. Locally:
 
     ANDROID_NDK_HOME=/path/to/ndk ./build.sh        # inside pov_mod/
-
-Water Tweaks / Infinite Flow / V4 Cine Mod CI builds were removed on 2026-11-11 at the user's
-request; their source remains in this repository (see git history).
 
 ## Tests
 

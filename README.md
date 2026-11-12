@@ -109,7 +109,9 @@ Mod Menu -> "Water Tweaks": toggle + sliders (water delay, lava delay overworld 
 ## Screen POV (standalone mod in `pov_mod/`)
 
 A separate, camera-only mod: set your own screen POV from the in-game Mod Menu
-(yaw / pitch / position offsets, relative-to-player or absolute) — body never touched.
+(camera position XYZ, relative-to-player or absolute) — body never touched.
+**v1.5.0 is a SAFE build: the camera override is disabled** (v1.4 corrupted
+movement/attack controls on device); see `pov_mod/POV_MOD.md` for the postmortem.
 It is its **own** `.levipack` (`pov_mod.levipack`, CI artifact `screen_pov`), independent of the
 Water Tweaks mod above. See `pov_mod/POV_MOD.md` for usage and the honest on-device status.
 The CI workflow now builds only this mod (Water Tweaks / Infinite Flow / V4 Cine Mod CI builds were
