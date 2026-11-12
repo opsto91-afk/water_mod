@@ -30,7 +30,14 @@ jobs:
       - name: Configure NDK path
         run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
       - name: Build pov_mod.levipack
-        run: cd pov_mod && bash ./build.sh
+        run: |
+          cd pov_mod
+          set -o pipefail
+          bash ./build.sh 2>&1 | tee /tmp/build.log || {
+            grep -iE "error(:| [0-9])" /tmp/build.log | head -10 | sed 's/%/%25/g' | while IFS= read -r l; do echo "::error::$l"; done
+            echo "::error::build.sh failed - see job log for full output"
+            exit 1
+          }
       - name: Upload Screen POV package
         uses: actions/upload-artifact@v4
         with:
