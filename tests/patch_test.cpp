@@ -113,6 +113,47 @@ int main() {
   std::vector<std::string> log2;
   assert(apply(mem.data(), c, t, bad, log2) == 0 && log2[0].find("FAILED") != std::string::npos);
 
+  // 7) Infinite Flow table: vanilla is cap 7 everywhere; Fixed site swaps csel->mov
+  {
+    const Table ft_vanilla = flowTable(false);
+    assert(ft_vanilla.patches.size() == 5);
+    for (const auto& p : ft_vanilla.patches) assert(encode(p, 7) == p.original);
+    const Table ft = flowTable(true);
+    assert(ft.patches.size() == 6);
+    const auto& fixed = ft.patches.back();
+    assert(fixed.kind == Kind::Fixed && fixed.original == 0x1A88C018u && encode(fixed, 15) == 0x2A0003F8u &&
+           encode(fixed, 1) == 0x2A0003F8u);  // value ignored
+    assert(!ft.guards.empty());
+    // verify accepts its own patch applied; rejects a foreign instruction at the Fixed site
+    Table small;
+    small.patches = {
+        {"fixed", 0x100, 0x1A88C018u, Kind::Fixed, 0, &Config::spreadLimit, 1, 15, 0x2A0003F8u},
+        {"cap", 0x200, 0x71001D5Fu, Kind::CmpWImm, 10, &Config::spreadLimit, 1, 15, 0},
+    };
+    small.guards = {};
+    std::vector<uint8_t> mem2(0x400, 0);
+    put(mem2, 0x100, 0x1A88C018u);
+    put(mem2, 0x200, 0x71001D5Fu);
+    assert(verify(mem2.data(), mem2.size(), small).empty());
+    put(mem2, 0x100, 0x2A0003F8u);  // our word => accepted
+    assert(verify(mem2.data(), mem2.size(), small).empty());
+    put(mem2, 0x100, 0xD503201Fu);  // foreign word => refused
+    assert(!verify(mem2.data(), mem2.size(), small).empty());
+    // cap encoding at 15
+    assert(encodeCmpWImm(10, 15) == 0x71003D5Fu);
+    assert(encodeCmpWImm(25, 15) == 0x71003F3Fu);
+    assert(encodeCmpWImm(24, 15) == 0x71003F1Fu);
+    assert(encodeCmpWImm(22, 15) == 0x71003EDFu);
+    // flow.cfg roundtrip
+    Config fc;
+    std::vector<std::string> fw;
+    assert(parseConfig("spread_limit=9\nkeep_flow_type=0\ndry_run=1\n", fc, fw));
+    assert(fc.spreadLimit == 9 && !fc.spreadKeepType && fc.dryRun && fw.empty());
+    Config fd;
+    std::vector<std::string> fdw;
+    assert(parseConfig(flowConfigText(), fd, fdw) && fd.spreadLimit == 15 && fd.spreadKeepType && fdw.empty());
+  }
+
   std::puts("ALL PATCH TESTS PASSED");
   return 0;
 }

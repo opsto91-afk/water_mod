@@ -18,6 +18,11 @@ struct Config {
   uint32_t lavaDelayNether = 10;      // lava, "ultra warm" dimensions          (vanilla 10)
   uint32_t sourceCount = 2;           // adjacent sources needed for a new one  (vanilla 2)
   bool dryRun = false;                // true = verify + log only, never write memory
+  // --- Infinite Flow variant only (unused by the water_mod UI) ---
+  uint32_t spreadLimit = 15;          // max flow distance (vanilla 7). Keep <= 15: higher values
+                                      // re-type distant water to the "falling" fluid kind in this build.
+  bool spreadKeepType = true;         // true = distant flow stays "flowing" (normalizes the packer's
+                                      // >7 -> +8 "falling" re-type). false = vanilla behaviour.
 };
 
 // Parses "key=value" lines ('#' starts a comment). Unknown keys / bad values are reported in `warnings`.
@@ -25,16 +30,17 @@ struct Config {
 bool parseConfig(const std::string& text, Config& out, std::vector<std::string>& warnings);
 std::string defaultConfigText();
 
-enum class Kind { MovzW, CmpWImm };  // mov wN,#imm16  /  cmp wN,#imm12
+enum class Kind { MovzW, CmpWImm, Fixed };  // mov wN,#imm16  /  cmp wN,#imm12  /  fixed raw word (mov w24,w0)
 
 struct Patch {
   const char* name;
   uint64_t offset;      // from libminecraftpe.so base
   uint32_t original;    // instruction word expected there (vanilla)
   Kind kind;
-  uint32_t reg;         // Rd for MovzW, Rn for CmpWImm
+  uint32_t reg;         // Rd for MovzW, Rn for CmpWImm (ignored for Fixed)
   uint32_t Config::*value;
   uint32_t minValue, maxValue;
+  uint32_t fixed = 0;   // word to write when kind == Kind::Fixed (value/clamping ignored)
 };
 
 struct Guard {  // extra instruction that must match, used only to recognise the right build
@@ -48,6 +54,11 @@ struct Table {
 };
 
 const Table& defaultTable();  // the real offsets (Minecraft build analysed with Zaphkiel)
+// Infinite Flow variant: the 5 "cmp wN,#0x7" spread-cap sites across the 3 copies of the
+// liquid-propagation path, plus (optionally) the csel->mov packer normalizer that re-types
+// distance>7 water as "falling". Guards reuse the water_mod build markers (same Minecraft build).
+Table flowTable(bool keepFlowType);
+std::string flowConfigText();
 
 uint32_t encodeMovzW(uint32_t rd, uint32_t imm16);
 uint32_t encodeCmpWImm(uint32_t rn, uint32_t imm12);
