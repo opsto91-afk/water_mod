@@ -1,4 +1,8 @@
-name: Water Mod Build
+name: Screen POV Build
+
+# NOTE (2026-11-11): at the user's request this workflow now builds ONLY the Screen POV mod.
+# The Water Tweaks / Infinite Flow / V4 Cine Mod jobs were removed - their source and history
+# remain in this repository (see git log); re-add them if ever needed.
 
 on:
   push:
@@ -8,34 +12,46 @@ permissions:
   contents: read
 
 jobs:
-  host-tests:
-    name: Host patch tests
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run patch tests
-        run: make -C tests run
-
-  android:
-    name: Build arm64 LeviLauncher package
-    runs-on: ubuntu-latest
+  pov-mod:
+    name: Build Screen POV mod (from pov_mod/)
+    # ubuntu-26 image (new ubuntu-latest) broke the pinned NDK setup in Nov 2026 -
+    # the build died instantly at the toolchain file. Pin the LTS image that works.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - name: Install build tools
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake zip
+      - name: Run pov_mod core tests
+        run: make -C pov_mod/tests run
       - name: Set up Android SDK and NDK
         uses: android-actions/setup-android@v3
         with:
           packages: "ndk;27.2.12479018"
       - name: Configure NDK path
         run: echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
-      - name: Build water_mod.levipack
-        run: ./build.sh
-      - name: Upload LeviLauncher package
+      - name: Preflight NDK check
+        run: |
+          if [ ! -f "$ANDROID_NDK_HOME/build/cmake/android.toolchain.cmake" ]; then
+            echo "::error::NDK toolchain missing at $ANDROID_NDK_HOME - setup-android did not install ndk;27.2.12479018 on this image"
+            ls -la "$ANDROID_HOME" || true
+            ls -la "$ANDROID_HOME/ndk" || true
+            exit 1
+          fi
+          echo "NDK toolchain OK: $ANDROID_NDK_HOME"
+      - name: Build pov_mod.levipack
+        run: |
+          cd pov_mod
+          set -o pipefail
+          bash ./build.sh 2>&1 | tee /tmp/build.log || {
+            tail -n 12 /tmp/build.log | sed 's/%/%25/g; s/\r//g' | while IFS= read -r l; do echo "::error::$l"; done
+            echo "::error::build.sh failed - see job log for full output"
+            exit 1
+          }
+      - name: Upload Screen POV package
         uses: actions/upload-artifact@v4
         with:
-          name: water_mod
-          path: dist/water_mod.levipack
+          name: screen_pov
+          path: pov_mod/dist/pov_mod.levipack
           if-no-files-found: error
