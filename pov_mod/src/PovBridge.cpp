@@ -279,6 +279,8 @@ void watchLoop() {
   }
 }
 
+namespace pov {
+
 void bridgeInit(const std::string& dataDir) {
   if (g_started.exchange(true)) return;
   // kurumi (external storage) first, data dir as fallback
@@ -331,3 +333,5 @@ bool hooksReady() { return g_hooksInstalled.load(std::memory_order_acquire); }
 void logDiagSnapshot() {
   diagBeat("snapshot");
 }
+
+}  // namespace pov
