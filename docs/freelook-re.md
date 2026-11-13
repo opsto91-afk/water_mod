@@ -519,3 +519,61 @@ RenderLevel) or the same wrong-object bug — the v1.4 chaos makes v1.3's result
 inconclusive. Evidence to request from the user when possible: kurumi/pov_mod.log from
 the v1.4 session (contains "override: FIRST LRP+0x614 write cur=... target=..." and the
 periodic "renderer camera pos" lines).
+
+---
+
+## Phase 9 (2026-11-13) — ACTUAL freelook SOURCE reviewed (user-pasted freelook.cpp)
+
+User pasted `freelook.cpp` (BedrockTools freelook module source). This supersedes the
+binary-only reading of Phase 1 AND explains why pov v1.2-v1.4 failed: we never had this.
+
+### What the source proves (vs my earlier claims)
+
+* Hooks resolved: `UpdatePlayerFromCamera`, `LocalPlayerApplyTurnDelta`,
+  `GetPerspective` (***not*** RenderLevel — RenderLevel was never a freelook hook; my v1.2/v1.3
+  relied on it as if it mattered), `ActorGetHeadRotation`, `ActorSetHeadRotation`.
+* `updatePlayerDetour(camera, component, player)`: if player != localPlayer() → passthrough.
+  If freelook active → **restore saved player state + input component, do NOT call original**
+  (body never syncs from camera). Else → passthrough to original. MotionBlurCaptureCamera()
+  called on BOTH paths after the decision.
+* `restorePlayer` memcpys **float[4]** (16 bytes!) via `player->rotationComponent()` —
+  NOT float[2]. Our pov_mod read 8 bytes here — would misread orientation always.
+* Camera pose lives in the **CameraComponent** object passed as `camera` to the detour;
+  freelook saves/restores `camera + sdk::offsets::CameraComponent::mOrientation` (16 B).
+  (My Phase 1 "camera+0x238" guess was the wrong struct/offset — entangled with rotationComponent.)
+* Head rotation is a plain **sdk::Vec2** on Player (getHeadRotation/setHeadRotation).
+  The 0x8d signature is the Vec2 writer, not some complex pose writer; my Phase 4-6 "entt pool
+  writer with 0xBABE7211" decode was over-analysis of a simple fn (lookup pool included but it's
+  just the component fetch).
+* **InputComponent (entt hash 0x018b1887 — same hash, confirmed)**: context → registry
+  (field@0x8) → buckets@0x38/0x40 → nodes@0x50/0x58 (stride 0x20) → pool (node+0x10) →
+  entity = field(context,0x10) → **sparse set** (pool+0x8/0x10, page = (entity & 0x3ffff)>>11) →
+  **packed entity** u32 per page slot; `packed ^ (entity & 0xfffc0000) > 0x3fffe` → null;
+  payload (pool+0x50/0x58, page=(packed & 0x3ffff)>>7) → **InputComponent* = storage + (packed & 0x7f) * 0x64**.
+* **InputComponent layout**: `cameraOrientation` (sdk::Vec3) at **+0x54**; `flags` (u16) at **+0x60**;
+  whole component stride **0x64**. `movementFlags = (1<<9) | (1<<10)` — the two bits freelook
+  saves/restores so movement direction stays player-relative while the camera orbits.
+* `samePlayer()` requires same player pointer AND same `level()` AND same `dimension()` —
+  identity across respawn/world change; we had no such guard.
+* `requested() = module enabled && hooksReady && !keybindBlocked()`.
+* On disable/unload everything is restored from the session (rotation, headRotation,
+  input cameraOrientation, flags bits 9|10) — full rollback discipline.
+  POV mod had no equivalent restore → leaked state.
+
+### Lesson applied to pov_mod
+
+The ONLY proven way to move the camera on this build: hook `UpdatePlayerFromCamera` exactly
+like this — keep `camera` (CameraComponent*) and `player`, call original (or skip), then
+override the camera pose fields — with session save/restore and localPlayer/level/dimension
+identity checks. Position override = same pattern, one field; need
+`sdk::offsets::CameraComponent` (mPosition?) from the SDK headers (client-side) to pick the
+right offset — none of the addresses we guessed (LRP+0x614 etc.) were needed/verified.
+
+### Still missing to implement POV correctly
+
+1. The BedrockTools SDK headers (this source's includes): `sdk/offsets.hpp` (CameraComponent
+   position/orientation offsets, ClientInstanceGetLocalPlayer sig id), `sdk/client/ClientInstance.hpp`,
+   `modules/ModuleRegistry.hpp`, `launcher/OverlayBridge.hpp`, `motionblur.hpp`, `core/*`.
+   -> Ask the user for the repo/source path these reference, or the repo URL.
+2. A device confirmation whether "MotionBlurCaptureCamera" is required for the view to pick up
+   the overridden pose (freelook always calls it).
