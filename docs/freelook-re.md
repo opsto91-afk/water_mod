@@ -611,3 +611,35 @@ calls the original first/always, each line carries a global seq counter:
 Signatures resolve independently; misses degrade to "MISSING" and the rest still run.
 One device play session + pov_mod.log reconstructs the full frame order. Acceptance
 of the FINAL write build remains the user's on-device test only.
+
+---
+
+## Phase 11 (2026-11-13) — v1.6.0 OBSERVER device log analyzed; v1.7.0 shipped
+
+Device run (user, 2026-11-13 18:17–18:18, `kurumi/pov_mod.log`, 362 lines):
+
+* All four sigs resolved & hooks installed ok. Two sessions logged.
+* **CamTick (fn_0xb7d4274): 0 calls in the entire session** (renderLevel=1251,
+  camSetter=1251, updatePlayer=1405 → per rendered frame: camSetter + renderLevel;
+  UpdatePlayer at ~1.12× frame rate).
+* **camSetter `this` == LRP, pointer-identical** to the LRP cached by RenderLevel
+  (`0xb400006cfa9dc768` on every frame). camSetter runs every frame.
+* LRP+0x614 was **never changed by the camSetter or renderLevel originals**
+  (96/96 sampled PRE==POST; `changed-by-original=1` count: 0). The pose is rewritten
+  tick-side elsewhere (changed only when the world camera actually moved,
+  177.944,64.620,35.465 → 176.254,64.592,34.511).
+* v1.4 re-explained: its CamTick write was dead (function never runs), and its
+  UpdatePlayerFromCamera **skip-original** froze the player/camera sync → camera
+  static + movement/attack corruption. The +0x614 write itself was never the cause.
+  (Also latent v1.4 bug: relative composeCamPos did `cur + offset` against memory we
+  overwrite → per-frame drift if the pose is not rewritten every frame.)
+
+**v1.7.0** = position-override build on these facts:
+* Hooks: CamSetter only for writes (post-orig, 12 bytes, toggle-ON only) +
+  RenderLevel read-only pulse. CamTick and UpdatePlayerFromCamera NOT hooked.
+* Drift-free relative mode: vanilla pose snapshot disambiguated against our last
+  written value (memcmp), compose `vanilla + offset`; absolute mode verbatim world XYZ.
+* OFF = zero writes + one-time vanilla restore of LRP+0x614 if our pinned value is
+  still in place and nothing fresher exists.
+* Device test = acceptance gate (user). If the view doesn't move on-device, the
+  render path consumes the pose elsewhere and we go back to RE — no more blind writes.

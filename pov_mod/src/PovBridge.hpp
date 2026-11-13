@@ -1,22 +1,16 @@
 // PovBridge.hpp - game side of the Screen POV mod.
 //
-//   v1.5.0 (SAFE BUILD, 2026-11-13): the game is NEVER written to.
-//   Background: v1.4 wrapped two functions identified from on-device dumps
-//   (fn_0xb7d4274 "CamTick" / fn_0xb7c7268 "CamSetter") and overwrote a float3 at
-//   their `this+0x614` AFTER the original ran, on the theory that `this` was the
-//   renderer's LevelRendererPlayer. On-device testing proved that theory WRONG:
-//   the view never moved and the movement/attack controls were corrupted
-//   (joystick inverted, actions reversed) - the writes landed in an object the
-//   input/player-movement system consumes, not (only) the render camera pose.
-// v1.5.0 design:
-//   * NO writes of any kind to game memory.
-//   * The ONLY hook is RenderLevel (same 60.4 signature Freelook uses), wrapped
-//     100% pass-through: it reads the live camera float3 (renderer+0x430 ->
-//     LRP+0x614) every ~2 s and logs it. Read-only, zero behaviour change.
-//   * The module toggle and the X/Y/Z settings are saved but INERT.
-//   * The camera override is DISABLED until the exact pose-consumer is
-//     identified and verified on device.
-//   Vanilla gameplay (movement, look, buttons) is 100% untouched.
+//   v1.7.0 (POSITION OVERRIDE, 2026-11-13): the camera POSITION is overridden,
+//   nothing else. Design facts (device-verified, see docs/freelook-re.md Phase 11):
+//   * CamTick (fn_0xb7d4274) is never called on this game build - not hooked.
+//   * CamSetter (fn_0xb7c7268) runs EVERY rendered frame with `this` == the LRP.
+//   * UpdatePlayerFromCamera is never hooked (v1.4 skipped it - that was the bug).
+//   * The ONLY write: 12 bytes at LRP+0x614 AFTER the camSetter original returns,
+//     only while the module toggle is ON. Relative mode composes from a
+//     disambiguated vanilla snapshot (no per-frame drift); absolute mode writes
+//     the configured world XYZ verbatim. Orientation/InputComponent/movement code
+//     is never touched.
+//   * Toggle OFF => fully vanilla (zero writes).
 //   Log: kurumi/pov_mod.log (fallback: the mod's data dir). Crash tracer included.
 #pragma once
 #include <string>
@@ -28,12 +22,12 @@ namespace pov {
 void bridgeInit(const std::string& dataDir);   // starts the watcher thread (idempotent)
 void bridgeShutdown();                          // unhooks + stops the watcher thread
 
-void setOverrideEnabled(bool on);               // module toggle (logs only in v1.5.0)
+void setOverrideEnabled(bool on);               // module toggle (OFF = zero game writes)
 bool overrideEnabled();
-void setRequest(const PovRequest& req);         // store request (inert in v1.5.0)
+void setRequest(const PovRequest& req);         // store request (applied from camSetter detour)
 PovRequest request();
 
-bool hooksReady();                              // RenderLevel diagnostic installed?
+bool hooksReady();                              // camSetter override hook installed?
 
 // diagnostics (written into pov_mod.log + __android_log_print "ScreenPov")
 void logDiagSnapshot();

@@ -1,65 +1,53 @@
-# Screen POV v1.6.0 (LeviLauncher native mod) — OBSERVER BUILD
+# Screen POV v1.7.0 (LeviLauncher native mod) — position override
 
-> **v1.6.0 does NOT move the camera.** It is an instrument, not a feature.
-> It answers ONE question that the v1.4 postmortem left open:
-> **who writes the renderer camera pose (LRP+0x614), and when — and is
-> `fn_0xb7d4274`'s `this` the LRP at all?**
+> **v1.7.0 moves the camera POSITION (X/Y/Z) only.** Orientation,
+> movement and controls stay vanilla. Toggle **OFF** ⇒ fully vanilla.
 
-## Why yet another build
+## How it works (device-verified design)
 
-Every camera-moving attempt so far failed on device, so nothing ships blind again:
+v1.6.0 OBSERVER run on this exact game build proved:
 
-* v1.2/v1.3 — wrote the pose *before* the original `RenderLevel`; something
-  rewrote it later in the frame → static screen.
-* v1.4 — wrote the pose *after* `fn_0xb7d4274`; the camera didn't move AND the
-  movement/attack controls broke. Theory: that function's `this` is not (only)
-  the renderer, or its float3 is consumed elsewhere.
-* v1.5.0 — zero writes, game vanilla. Inert; device-confirmed.
-* v1.6.0 (**this build**) — zero writes, **logs only**.
+* `CamTick (fn_0xb7d4274)` is **never called** (0 invocations in the session) — not hooked.
+* `CamSetter (fn_0xb7c7268)` is called **every rendered frame** with `this == the LRP`
+  (pointer-identical to `renderer+0x430`'s LevelRendererPlayer) — this is the pose funnel.
+* The renderer camera pose float3 lives at **LRP+0x614**; it is rewritten tick-side
+  (only when it changes), never inside camSetter/RenderLevel originals.
+* `UpdatePlayerFromCamera` was v1.4's control-corruption bug (it skipped the original) —
+  **never hooked in v1.7.0**.
 
-## What it does (nothing else)
+So v1.7.0 installs exactly two hooks:
 
-Four pass-through hooks, all calling the original first/always, **none writes a
-single byte of game memory**:
+1. **CamSetter** — calls the original first, then (toggle ON only) overwrites the
+   12-byte float3 at `LRP+0x614`. Relative mode composes from a disambiguated
+   *vanilla snapshot* (entry pose compared against what we wrote last frame) so the
+   offset can never accumulate frame-over-frame; absolute mode writes the world
+   XYZ verbatim. Toggle OFF performs a one-time vanilla restore if our pinned
+   pose is still in place.
+2. **RenderLevel** — read-only diagnostic pulse (~2 s) for the log. Zero writes.
 
-| Hook | Logs |
-|------|------|
-| `UpdatePlayerFromCamera` | call count, pointers, global seq no. |
-| `RenderLevel` | `renderer` ptr, `LRP = renderer+0x430` ptr, LRP+0x614 float3 **pre/post** original (first 48 frames), LRP ptr cached for comparisons |
-| `CamTick (fn_0xb7d4274)` | `this` ptr, `this == LRP?`, `this+0x614` pre/post original, whether the **original** changed `this+0x614` |
-| `CamSetter (fn_0xb7c7268)` | same as CamTick |
+## Mod Menu
 
-A global sequence counter is printed with every line, so the exact interleaving
-(tick vs render vs updatePlayer) can be reconstructed. Missed signatures simply
-log `MISSING` and the rest keep working. Crashes, if any, land in the usual
-`pov_mod.log` crash tracer.
+* **Toggle "Screen POV"** — OFF = fully vanilla (zero writes).
+* **Offset X / Y / Z** — relative: camera offset in blocks. Absolute (relative OFF):
+  world XYZ coordinates.
+* **Relative to player** — ON: camera = vanilla pose + offset (follows you).
+  OFF: camera pinned at the configured world XYZ.
+* **Reset to vanilla** — offsets := 0, relative ON.
 
-## What we need from you (one play session)
+## Test (the only acceptance gate)
 
-1. Import `pov_mod.levipack` from CI artifact `screen_pov` (workflow
-   **Screen POV Build**, PR #1), remove the old one.
-2. **Play 1–2 minutes**: walk around, turn the camera, maybe attack once.
-3. Send `Android/media/org.levimc.launcher/kurumi/pov_mod.log`
-   (filter for lines starting with `renderLevel` / `camTick` / `camSetter` /
-   `updatePlayer`).
-
-## How to read the log
-
-* `camTick ... this==LRP=1` and `this+0x614 changed-by-original=1` →
-  CamTick **is** the pose writer; v1.4's theory was right about the object —
-  next step is a write placed *after* its original, on top of an untouched
-  input path, plus reproducing the v1.4 control corruption with it DISABLED to
-  prove causality.
-* `this==LRP=0` → the v1.4 write landed in the **wrong object** — explains the
-  mirrored joystick; the real pose writer is still unidentified and we hunt it
-  from the seq order (whatever runs between `updatePlayer` and `camTick` and
-  touches LRP+0x614).
-* `renderLevel ... changed-by-original=1` → the render pass itself rewrites the
-  pose; the write point must move *inside/after* RenderLevel.
+1. Import the `screen_pov` artifact, remove the old build.
+2. Toggle ON with default offsets — the view should JUMP (offset is 4,7,-8 in the
+   existing cfg; use Reset to vanilla for a neutral test, then set X/Y/Z small).
+3. Walk around: the view should follow at the offset; movement, look and attack
+   must feel exactly like vanilla.
+4. Toggle OFF: the view must return to the normal position.
+5. If anything is off (view doesn't move / weird feel / crash): toggle OFF and
+   send `kurumi/pov_mod.log`.
 
 ## Honest status
 
-* **The POV camera does NOT work in v1.6.0.** Deliberate.
-* Your game stays 100% vanilla; X/Y/Z are saved but inert.
-* No claims beyond the log. The next (write-capable) build ships only after
-  this log pins the pose writer, and is then verified on device by you.
+* Position override only; orientation/FOV/item sway are NOT implemented (by design).
+* The write point is the best device-verified candidate; if the view still doesn't
+  react on-device, that proves the renderer consumes the pose from somewhere else,
+  and the next RE step is identifying that consumer — not more writes.
