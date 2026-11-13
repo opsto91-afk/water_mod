@@ -577,3 +577,37 @@ right offset — none of the addresses we guessed (LRP+0x614 etc.) were needed/v
    -> Ask the user for the repo/source path these reference, or the repo URL.
 2. A device confirmation whether "MotionBlurCaptureCamera" is required for the view to pick up
    the overridden pose (freelook always calls it).
+
+---
+
+## Phase 10 (2026-11-13) — v1.6.0 OBSERVER build: logs-only frame-order measurement
+
+BedrockTools source (QYCottage/BedrockTools, MIT, Copyright (c) 2026 RadiantByte) is
+now on disk (snapshot 2026-11-13, `BedrockTools-main`). Key offsets confirmed verbatim
+from `include/bedrocktools/sdk/offsets/Render.hpp`:
+
+- `LevelRendererPlayer::mCamPos = 0x614` (float3 camera position; ONLY renderer-side).
+- `LevelRenderer::mLevelRendererPlayer = 0x430`.
+- `CameraComponent::mOrientation = 0x28` (16 B; CameraComponent has NO position field).
+
+Freelook's full call path (UpdatePlayerFromCamera skip-original + restore;
+LocalPlayerApplyTurnDelta pass-through; GetPerspective force-1 while active;
+MotionBlurCaptureCamera(camera, player) on BOTH paths; samePlayer() checks player
+ptr + level() + dimension()) is recorded in Phase 9. The freelook signature strings
+match our device-resolved sigs byte-for-byte (UpdatePlayerFromCamera, RenderLevel).
+
+**Remaining unknown (the ONLY reason no write build ships yet):** the identity of the
+per-frame pose writer of LRP+0x614 and its frame order vs RenderLevel, and whether
+`fn_0xb7d4274` ("CamTick", v1.4 wrong-write suspect) is the LRP at all.
+
+v1.6.0 = observer build: ZERO writes to game memory. Four pass-through hooks, each
+calls the original first/always, each line carries a global seq counter:
+  1. UpdatePlayerFromCamera — ptrs (camera/component/player), first 24 calls detailed.
+  2. RenderLevel — renderer ptr, cached LRP ptr (renderer+0x430), LRP+0x614 pre/post
+     original (first 48 frames), LRP+0x614 changed-by-original flag + ~2 s pulse.
+  3. CamTick (fn_0xb7d4274) — `this`, `this==LRP?`, this+0x614 pre/post original,
+     changed-by-original flag (first 48 calls).
+  4. CamSetter (fn_0xb7c7268) — same treatment.
+Signatures resolve independently; misses degrade to "MISSING" and the rest still run.
+One device play session + pov_mod.log reconstructs the full frame order. Acceptance
+of the FINAL write build remains the user's on-device test only.

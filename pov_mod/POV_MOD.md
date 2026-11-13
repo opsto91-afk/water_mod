@@ -1,76 +1,65 @@
-# Screen POV v1.5.0 (LeviLauncher native mod) — SAFE BUILD
+# Screen POV v1.6.0 (LeviLauncher native mod) — OBSERVER BUILD
 
-> **v1.5.0 does NOT move the camera.** It exists to (1) return your game to a
-> 100% unbroken state and (2) keep only the XYZ settings. The camera override is
-> disabled until the pose-consumer RE is finished and verified on device.
+> **v1.6.0 does NOT move the camera.** It is an instrument, not a feature.
+> It answers ONE question that the v1.4 postmortem left open:
+> **who writes the renderer camera pose (LRP+0x614), and when — and is
+> `fn_0xb7d4274`'s `this` the LRP at all?**
 
-## Why
+## Why yet another build
 
-v1.4 (2026-11-13) hooked two functions taken from static dumps of this build
-(`fn_0xb7d4274` / `fn_0xb7c7268`, on the theory they write the renderer's pose
-float3). On device, with the dump-derived theory unverified beyond the disasm:
+Every camera-moving attempt so far failed on device, so nothing ships blind again:
 
-* the camera **never moved**, and
-* the player **movement / attack controls broke** — the joystick was mirrored
-  ("forward walks back, left walks right, forward also drifts right") and the
-  attack button behaved reversed.
+* v1.2/v1.3 — wrote the pose *before* the original `RenderLevel`; something
+  rewrote it later in the frame → static screen.
+* v1.4 — wrote the pose *after* `fn_0xb7d4274`; the camera didn't move AND the
+  movement/attack controls broke. Theory: that function's `this` is not (only)
+  the renderer, or its float3 is consumed elsewhere.
+* v1.5.0 — zero writes, game vanilla. Inert; device-confirmed.
+* v1.6.0 (**this build**) — zero writes, **logs only**.
 
-Conclusion: the object those functions operate on is **not** (only) the renderer
-camera pose — or the writes landed in a component the input/movement system
-consumes. The hooks were removed in v1.5.0.
+## What it does (nothing else)
 
-## What v1.5.0 does
+Four pass-through hooks, all calling the original first/always, **none writes a
+single byte of game memory**:
 
-* **Zero writes to game memory — ever.**
-* The ONLY hook is `RenderLevel` (60.4 sig Freelook uses) as a **read-only,
-  100% pass-through** diagnostic: every ~2 s it logs the live camera float3
-  (`renderer+0x430 → LRP+0x614`) to `pov_mod.log`.
-* `UpdatePlayerFromCamera` / `LocalPlayerApplyTurnDelta` are **not** hooked.
-* Mod Menu -> "Screen POV": **X / Y / Z sliders + Relative-to-player toggle +
-  Reset to vanilla** — all SAVED but **inert** (they take effect only once the
-  fixed camera build ships).
-* All legacy sliders (Yaw / Pitch / Roll / Invert yaw / Invert pitch) are gone;
-  old `pov.cfg` orientation keys are accepted and ignored.
-* Crash tracer + `pov_mod.log` (Kurumi path) kept.
+| Hook | Logs |
+|------|------|
+| `UpdatePlayerFromCamera` | call count, pointers, global seq no. |
+| `RenderLevel` | `renderer` ptr, `LRP = renderer+0x430` ptr, LRP+0x614 float3 **pre/post** original (first 48 frames), LRP ptr cached for comparisons |
+| `CamTick (fn_0xb7d4274)` | `this` ptr, `this == LRP?`, `this+0x614` pre/post original, whether the **original** changed `this+0x614` |
+| `CamSetter (fn_0xb7c7268)` | same as CamTick |
 
-## Install over v1.4
+A global sequence counter is printed with every line, so the exact interleaving
+(tick vs render vs updatePlayer) can be reconstructed. Missed signatures simply
+log `MISSING` and the rest keep working. Crashes, if any, land in the usual
+`pov_mod.log` crash tracer.
 
-1. Remove/overwrite `screen_pov` from the launcher (or delete the old
-   `pov_mod.levipack`), import this build, start the game.
-2. Delete the old `pov.cfg` in the mod's data dir if you want a clean config
-   (orientation values are ignored anyway).
-3. Check `Android/media/org.levimc.launcher/kurumi/pov_mod.log` — the first line
-   says `Screen POV v1.5.0 start` and `SAFE MODE: camera override DISABLED`.
-4. Your controls will behave **exactly like vanilla Minecraft**.
+## What we need from you (one play session)
+
+1. Import `pov_mod.levipack` from CI artifact `screen_pov` (workflow
+   **Screen POV Build**, PR #1), remove the old one.
+2. **Play 1–2 minutes**: walk around, turn the camera, maybe attack once.
+3. Send `Android/media/org.levimc.launcher/kurumi/pov_mod.log`
+   (filter for lines starting with `renderLevel` / `camTick` / `camSetter` /
+   `updatePlayer`).
+
+## How to read the log
+
+* `camTick ... this==LRP=1` and `this+0x614 changed-by-original=1` →
+  CamTick **is** the pose writer; v1.4's theory was right about the object —
+  next step is a write placed *after* its original, on top of an untouched
+  input path, plus reproducing the v1.4 control corruption with it DISABLED to
+  prove causality.
+* `this==LRP=0` → the v1.4 write landed in the **wrong object** — explains the
+  mirrored joystick; the real pose writer is still unidentified and we hunt it
+  from the seq order (whatever runs between `updatePlayer` and `camTick` and
+  touches LRP+0x614).
+* `renderLevel ... changed-by-original=1` → the render pass itself rewrites the
+  pose; the write point must move *inside/after* RenderLevel.
 
 ## Honest status
 
-* **The POV camera does NOT work in v1.5.0.** This is deliberate: no unverified
-  writes reach the game.
-* What is still known-good: the renderer camera position float3 at
-  `LRP+0x614` is readable and tracks the world camera correctly (v1.2/v1.4
-  logs). A future build must pin the pose **where the renderer actually reads
-  it each frame** — but BOTH known write points failed on device already
-  (RenderLevel-before-orig = static screen in v1.3; post-`fn_0xb7d4274` = broken
-  controls in v1.4), so the frame order / target object must be pinned down
-  FIRST, with on-device confirmation, before any write ships again.
-* Every artifact from the dump session lived outside the repository and was lost
-  when a sandbox reset wiped it; the remaining RE notes are in
-  `docs/freelook-re.md` (including the v1.4 postmortem).
-* Next step needs **on-device verification only**: no blind rebuilds. Either
-  re-dump the camera subsystem (the two `0xb7d4xxx/0xb7c7xxx` functions and the
-  callers that pass `this` = the camera object), or paste `pov_mod.log` from the
-  v1.4 session (it contains the `override: FIRST LRP+0x614 write ...` and the
-  periodic `renderer camera pos` lines) — that log alone will show whether the
-  renderer ever consumed our values.
-
-## Build
-
-CI (this repository): the **Screen POV Build** workflow (job `pov-mod`) produces
-the `screen_pov` artifact (`pov_mod.levipack`) on every push. Locally:
-
-    ANDROID_NDK_HOME=/path/to/ndk ./build.sh        # inside pov_mod/
-
-## Tests
-
-`make -C tests run` — host-side unit tests for the camera math and config parsing.
+* **The POV camera does NOT work in v1.6.0.** Deliberate.
+* Your game stays 100% vanilla; X/Y/Z are saved but inert.
+* No claims beyond the log. The next (write-capable) build ships only after
+  this log pins the pose writer, and is then verified on device by you.

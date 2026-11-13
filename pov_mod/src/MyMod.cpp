@@ -1,15 +1,15 @@
-// MyMod.cpp - "Screen POV" v1.5.0  (LeviLauncher native mod, Preloader SDK `pl::` API)
+// MyMod.cpp - "Screen POV" v1.6.0  (LeviLauncher native mod, Preloader SDK `pl::` API)
 //
-//   v1.5.0 = SAFE BUILD (2026-11-13) after the v1.4 on-device failure.
+//   v1.6.0 = OBSERVER BUILD (2026-11-13) after the v1.4 on-device failure.
 //   v1.4 overwrote a float3 inside two hooked functions that were misidentified
 //   as the camera-pose writer. On device the camera never moved and the player
 //   movement / attack controls were corrupted (joystick mirrored, actions reversed).
-//   => v1.5.0 makes NO writes to game memory. The game is 100% vanilla.
+//   => v1.6.0 makes NO writes to game memory. The game is 100% vanilla.
 //   The X / Y / Z settings below are SAVED but INERT - they are the values the
 //   camera will use once the pose-consumer RE is finished and verified on device.
 //
 //   Mod Menu -> "Screen POV":
-//     * Toggle "Screen POV"   - module on/off (logs only; nothing is applied in v1.5.0)
+//     * Toggle "Screen POV"   - module on/off (logs only; nothing is applied in v1.6.0)
 //     * "Offset X / Y / Z"    - the future camera offsets (saved, inert for now)
 //     * "Relative to player"  - relative mode (camera follows player + offset) or
 //                               absolute world XYZ. Saved, inert for now.
@@ -51,7 +51,7 @@ Config g_config;
 std::mutex g_mu;
 
 // ---- tiny key=value persistence --------------------------------------------------------
-// v1.5.0 format: only pos_x / pos_y / pos_z / relative. Legacy orientation keys from
+// v1.6.0 format: only pos_x / pos_y / pos_z / relative. Legacy orientation keys from
 // v1.2-v1.4 config files are accepted and silently ignored (a warning is logged).
 bool loadConfig(const fs::path& file, Config& out, std::vector<std::string>& warnings) {
   std::ifstream in(file);
@@ -78,7 +78,7 @@ bool loadConfig(const fs::path& file, Config& out, std::vector<std::string>& war
     else if (key == "relative") out.relative = parseBool(value, out.relative);
     else if (key == "yaw" || key == "pitch" || key == "roll" ||
              key == "invert_yaw" || key == "invert_pitch")
-      warnings.push_back("legacy key ignored (v1.5.0): " + key);
+      warnings.push_back("legacy key ignored (v1.6.0): " + key);
     else warnings.push_back("unknown key: " + key);
   }
   return any;
@@ -87,7 +87,7 @@ bool loadConfig(const fs::path& file, Config& out, std::vector<std::string>& war
 void saveConfig(const fs::path& file, const Config& c) {
   std::ofstream out(file, std::ios::trunc);
   // pos in blocks. These values are SAVED but inert until the camera override is fixed.
-  out << "# Screen POV v1.5.0 (SAFE: override disabled) - pos in blocks\n"
+  out << "# Screen POV v1.6.0 (OBSERVER: override disabled) - pos in blocks\n"
       << "pos_x=" << c.px << "\n"
       << "pos_y=" << c.py << "\n"
       << "pos_z=" << c.pz << "\n"
@@ -124,7 +124,7 @@ class ScreenPovMod {
 
     applyRequestLocked();
     bridgeInit(mDir.string());
-    mSelf.getLogger().info("Screen POV v1.5.0 SAFE MODE: camera override disabled; game is 100% vanilla");
+    mSelf.getLogger().info("Screen POV v1.6.0 OBSERVER MODE: camera override disabled; game is 100% vanilla (logging only)");
     return true;
   }
 
@@ -134,17 +134,17 @@ class ScreenPovMod {
     const bool ok =
         pl::modmenu::ModuleBuilder(kModuleId, "Screen POV")
             .modId(mSelf.getId())
-            .description("v1.5.0 SAFE build: camera override DISABLED (see log). X/Y/Z are saved but inert. Log: kurumi/pov_mod.log")
+            .description("v1.6.0 OBSERVER build: camera override DISABLED (see log). X/Y/Z are saved but inert. Logs frame order + pointers only. Log: kurumi/pov_mod.log")
             .defaultEnabled(false)
             .onToggle([](std::string_view, bool on) { ScreenPovMod::instance().onToggle(on); })
             .onConfigChanged([](std::string_view, std::string_view key, std::string_view value) {
               ScreenPovMod::instance().onConfig(key, value);
             })
-            .config("pos_x", "Offset X (saved - inert in v1.5.0)",
+            .config("pos_x", "Offset X (saved - inert in v1.6.0)",
                     pl::modmenu::ConfigType::SliderFloat, std::to_string(c.px), "-20", "20")
-            .config("pos_y", "Offset Y (saved - inert in v1.5.0)",
+            .config("pos_y", "Offset Y (saved - inert in v1.6.0)",
                     pl::modmenu::ConfigType::SliderFloat, std::to_string(c.py), "-10", "10")
-            .config("pos_z", "Offset Z (saved - inert in v1.5.0)",
+            .config("pos_z", "Offset Z (saved - inert in v1.6.0)",
                     pl::modmenu::ConfigType::SliderFloat, std::to_string(c.pz), "-20", "20")
             .config("relative", "Relative to player (off = world position)",
                     pl::modmenu::ConfigType::Toggle, c.relative ? "true" : "false")
@@ -192,7 +192,7 @@ class ScreenPovMod {
       std::lock_guard<std::mutex> lk(g_mu);
       applyRequestLocked();
     }
-    setOverrideEnabled(on);  // OFF logs; nothing is applied either way in v1.5.0
+    setOverrideEnabled(on);  // OFF logs; nothing is applied either way in v1.6.0
   }
 
   void onConfig(std::string_view key, std::string_view value) {
