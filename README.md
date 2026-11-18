@@ -56,6 +56,6 @@ Mod Menu -> "Water Tweaks": toggle + sliders (water delay, lava delay overworld 
 
 ## Separate Android workstation
 
-[Orbit Workstation](workstation/README.md) is a standalone Android app with a project explorer, editor, console and on-device GGUF assistant. [Install the APK](workstation/Orbit-Workstation.apk). It needs no paid AI API and is independent of the Minecraft mod build.
+**[Download Orbit Workstation 0.2 for Android](workstation/Orbit-Workstation.apk?raw=true)** · [Setup and source](workstation/README.md). A scoped project editor, console and AI assistant with per-command approvals, optional Termux/Antigravity CLI, and configurable worker/manager teams. Local GGUF needs no paid API; Claude and DeepSeek APIs are opt-in. Independent of the Minecraft mod.
 
 The earlier [Pocket Bridge](pocket_bridge/README.md) remains available as a manual Termux companion for an existing DeepSeek chat.

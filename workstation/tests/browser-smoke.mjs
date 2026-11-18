@@ -5,6 +5,7 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { extname, resolve, sep } from "node:path";
 import assert from "node:assert/strict";
+import { studioSmoke } from "./studio-browser.mjs";
 const root = resolve("build/web");
 const server = createServer(async (q, r) => {
   try {
@@ -45,7 +46,7 @@ try {
   await page.route("**/brain.js", (route) =>
     route.fulfill({
       contentType: "text/javascript",
-      body: `export const modelName='QA only';export async function reply(h){if(h.at(-1).content.startsWith('Actual local tool result'))return 'Received the tool result.';return JSON.stringify({action:'create',path:'agent-note.md',text:'Made in the workstation'});}`,
+      body: `export const modelName='QA only';export async function reply(h){if(h.some(m=>m.content==='Review two reads'))return JSON.stringify({action:'read',path:'agent-note.md'});if(h.at(-1).content.startsWith('Actual local tool result'))return 'Received the tool result.';return JSON.stringify({action:'create',path:'agent-note.md',text:'Made in the workstation'});}`,
     }),
   );
   await page.goto(url);
@@ -59,7 +60,7 @@ try {
   await page.locator("[data-tab=assistant]").click();
   await page.locator("#message").fill("Create a note");
   await page.locator("#send").click();
-  await page.getByRole("button", { name: "Skip", exact: true }).click();
+  await page.getByRole("button", { name: "Deny", exact: true }).click();
   assert.equal(
     await page.locator('.tree-entry[title="agent-note.md"]').count(),
     0,
@@ -77,12 +78,32 @@ try {
   await page.locator("[data-tab=console]").click();
   await page.locator("#cmd").fill("wc agent-note.md");
   await page.locator("#cmd").press("Enter");
+  await page.locator("#reviewAllow").click();
   await page
     .locator("#log")
     .getByText(/4 words/)
     .waitFor();
   console.log(
     "Mobile editor persistence, skip/approve, result feedback, file explorer and console: OK (stub model).",
+  );
+  await page.locator("[data-tab=assistant]").click();
+  await page.locator("#message").fill("Review two reads");
+  await page.locator("#send").click();
+  await page.getByLabel("Repeat read approval").selectOption("2");
+  await page.getByRole("button", { name: "Allow next 2" }).click();
+  await page
+    .locator(".proposal")
+    .filter({ hasText: "Allowed by session rule · done" })
+    .nth(1)
+    .waitFor();
+  await page.getByRole("button", { name: "Deny", exact: true }).click();
+  assert(
+    (await page.locator("#scopeStatus").textContent()).includes(
+      "Ask every time",
+    ),
+  );
+  console.log(
+    "Inline command review: exactly two local assistant reads, third denied: OK.",
   );
   if (process.env.ORBIT_TEST_GGUF) {
     await page.unroute("**/brain.js");
@@ -103,11 +124,15 @@ try {
       .waitFor({ timeout: 120000 });
     const s = await page.locator(".msg.assistant pre").first().textContent();
     assert(
-      s && !s.startsWith("Could not complete:") && !s.startsWith("(No text"),
+      s &&
+        !s.startsWith("Not completed:") &&
+        !s.startsWith("Stopped.") &&
+        !s.startsWith("(No text"),
     );
     console.log("Actual bundled WASM loaded GGUF and generated output: OK.");
   }
   assert.deepEqual(errors, []);
+  await studioSmoke(browser, url);
 } finally {
   if (browser) await browser.close();
   server.closeAllConnections();

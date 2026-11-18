@@ -1,6 +1,7 @@
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.orbit.workstation" android:versionCode="1" android:versionName="0.1.0">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.orbit.workstation" android:versionCode="2" android:versionName="0.2.0">
   <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="34"/>
-  <!-- Optional. Only used for the two explicit Termux console commands. No INTERNET or broad storage permission. -->
+  <!-- Optional user-selected provider calls; no broad storage permission. -->
+  <uses-permission android:name="android.permission.INTERNET"/>
   <uses-permission android:name="com.termux.permission.RUN_COMMAND"/>
   <queries><package android:name="com.termux"/></queries>
   <application android:label="Orbit Workstation" android:icon="@drawable/orbit" android:allowBackup="false" android:usesCleartextTraffic="false" android:theme="@android:style/Theme.Material.NoActionBar">

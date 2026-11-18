@@ -43,7 +43,12 @@ export async function load(file) {
   engine = current;
   modelName = file.name;
 }
-export async function reply(history, signal, onText) {
+export async function reply(
+  history,
+  signal,
+  onText,
+  { system = SYSTEM, budget = 320 } = {},
+) {
   if (!engine) throw Error("Load a local model first.");
   const turns = [];
   for (const t of history.slice(-8)) {
@@ -57,12 +62,12 @@ export async function reply(history, signal, onText) {
   for (;;) {
     if (signal.aborted) throw Error("Stopped.");
     prompt = await engine.formatChat(
-      [{ role: "system", content: SYSTEM }, ...turns],
+      [{ role: "system", content: system }, ...turns],
       true,
     );
     if (
       (await engine.tokenize(prompt, true)).length <=
-      engine.getLoadedContextInfo().n_ctx - 325
+      engine.getLoadedContextInfo().n_ctx - budget - 5
     )
       break;
     if (turns.length > 1) {
@@ -77,7 +82,7 @@ export async function reply(history, signal, onText) {
       " [excerpt]";
   }
   return engine.createCompletion(prompt, {
-    nPredict: 320,
+    nPredict: budget,
     sampling: { temp: 0.25 },
     useCache: true,
     abortSignal: signal,

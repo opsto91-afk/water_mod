@@ -87,7 +87,7 @@ export async function localDisk() {
   };
 }
 const pending = new Map();
-let seq = 0;
+let seq = crypto.getRandomValues(new Uint32Array(1))[0];
 export const native = typeof window !== "undefined" && !!window.OrbitHost;
 if (native)
   window.orbitReply = (raw) => {
@@ -98,39 +98,67 @@ if (native)
     clearTimeout(cb.timer);
     msg.ok ? cb.yes(msg.value) : cb.no(Error(msg.error));
   };
-export function callHost(op, args = {}) {
-  if (!native) return Promise.reject(Error("Available in the Android app."));
+export function callHost(op, args = {}, signal) {
+  if (!native) return Promise.reject(Error("Available in the Android APK."));
+  if (signal?.aborted) return Promise.reject(Error("Stopped."));
   return new Promise((yes, no) => {
-    const id = String(++seq),
-      timer = setTimeout(
-        () => {
-          pending.delete(id);
-          no(
-            Error(
-              "Android did not return a result. Check the app and permissions.",
-            ),
-          );
-        },
-        op === "pick" ? 180000 : 30000,
-      );
-    pending.set(id, { yes, no, timer });
-    try {
-      window.OrbitHost.request(JSON.stringify({ id, op, ...args }));
-    } catch (e) {
+    const id = String(++seq);
+    function clean() {
       clearTimeout(timer);
       pending.delete(id);
+      signal?.removeEventListener("abort", stop);
+    }
+    function stop() {
+      clean();
+      if (op === "infer")
+        window.OrbitHost.request(
+          JSON.stringify({ op: "cancelInfer", id: String(++seq), target: id }),
+        );
+      no(Error("Stopped or timed out."));
+    }
+    const timer = setTimeout(
+      stop,
+      ["pick", "setKey"].includes(op)
+        ? 180000
+        : op === "infer"
+          ? 160000
+          : op === "terminal"
+            ? args.tool === "agy-open" && args.capture
+              ? 3610000
+              : 50000
+            : 30000,
+    );
+    pending.set(id, {
+      timer,
+      yes: (v) => {
+        clean();
+        yes(v);
+      },
+      no: (e) => {
+        clean();
+        no(e);
+      },
+    });
+    signal?.addEventListener("abort", stop, { once: true });
+    try {
+      window.OrbitHost.request(JSON.stringify({ ...args, id, op }));
+    } catch (e) {
+      clean();
       no(e);
     }
   });
 }
-export function androidDisk(name) {
+export function androidDisk(meta) {
+  const send = (op, body) => callHost(op, { ...body, grant: meta.grant });
   return {
-    name,
-    type: "Device folder",
-    list: (p) => callHost("list", { path: p }),
-    read: (p) => callHost("read", { path: p }),
-    mkdir: (p) => callHost("mkdir", { path: p }),
-    create: (p, text) => callHost("create", { path: p, text }),
-    save: (p, text, expected) => callHost("save", { path: p, text, expected }),
+    name: meta.name,
+    type: meta.single ? "Device file" : "Device folder",
+    onlyFile: meta.single ? meta.name : null,
+    writable: meta.write,
+    list: (p) => send("list", { path: p }),
+    read: (p) => send("read", { path: p }),
+    mkdir: (p) => send("mkdir", { path: p }),
+    create: (p, text) => send("create", { path: p, text }),
+    save: (p, text, expected) => send("save", { path: p, text, expected }),
   };
 }

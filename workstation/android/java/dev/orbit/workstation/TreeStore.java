@@ -19,7 +19,11 @@ final class TreeStore {
   final ContentResolver cr;
   final Uri tree;
 
-  TreeStore(ContentResolver cr, Uri tree) {
+  final boolean single, writable;
+
+  TreeStore(ContentResolver cr, Uri tree, boolean single, boolean writable) {
+    this.single = single;
+    this.writable = writable;
     this.cr = cr;
     this.tree = tree;
   }
@@ -30,31 +34,6 @@ final class TreeStore {
 
   private String root() {
     return DocumentsContract.getTreeDocumentId(tree);
-  }
-
-  private static String[] parts(String path, boolean empty) throws IOException {
-    if (empty && path.isEmpty()) return new String[0];
-    String[] p = path.split("/", -1);
-    if (p.length > 20 || path.length() > 600) throw new IOException(
-      "Path too long."
-    );
-    for (String s : p)
-      if (!visible(s)) throw new IOException(
-        "Use visible relative names in this project."
-      );
-    return p;
-  }
-
-  private static boolean visible(String s) {
-    return (
-      s != null &&
-      !s.isEmpty() &&
-      !s.startsWith(".") &&
-      s.length() <= 100 &&
-      !s.matches(".*[\\\\/\\p{Cc}\\u202a-\\u202e\\u2066-\\u2069].*") &&
-      s.indexOf('\n') < 0 &&
-      s.indexOf('\r') < 0
-    );
   }
 
   private static final String[] COLS = {
@@ -76,11 +55,19 @@ final class TreeStore {
   }
 
   String label() throws IOException {
-    try (Cursor c = cr.query(doc(root()), COLS, null, null, null)) {
+    try (
+      Cursor c = cr.query(single ? tree : doc(root()), COLS, null, null, null)
+    ) {
       if (c == null || !c.moveToFirst()) throw new IOException(
         "Folder permission lost. Select the folder again."
       );
-      return c.getString(1);
+      String name = c.getString(1);
+      if (
+        single &&
+        (!GrantPolicy.visible(name) ||
+          Document.MIME_TYPE_DIR.equals(c.getString(2)))
+      ) throw new IOException("Choose one visible text file.");
+      return name;
     }
   }
 
@@ -147,13 +134,28 @@ final class TreeStore {
   }
 
   Object run(String op, JSONObject req) throws Exception {
-    String[] p = parts(req.getString("path"), op.equals("list"));
+    String only = single ? label() : null;
+    String[] p = GrantPolicy.check(op, req.getString("path"), writable, only);
+    if (single) {
+      if (op.equals("list")) return new JSONArray().put(
+        new JSONObject().put("name", only).put("kind", "file")
+      );
+      if (op.equals("read")) return read(tree);
+      if (op.equals("save")) {
+        if (
+          !read(tree).equals(req.getString("expected"))
+        ) throw new IOException("File changed. Reopen before saving.");
+        write(tree, data(req));
+        return true;
+      }
+      throw new IOException("Single-file access cannot create other items.");
+    }
     if (op.equals("list")) {
       JSONArray a = new JSONArray();
       try (Cursor c = children(walk(p, p.length))) {
         while (c.moveToNext()) {
           String name = c.getString(1);
-          if (!visible(name)) continue;
+          if (!GrantPolicy.visible(name)) continue;
           if (a.length() >= 250) throw new IOException(
             "Open a smaller folder (maximum 250 entries)."
           );

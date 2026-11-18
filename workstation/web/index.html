@@ -6,7 +6,7 @@
       name="viewport"
       content="width=device-width,initial-scale=1,viewport-fit=cover"
     />
-    <meta name="theme-color" content="#101119" />
+    <meta name="theme-color" content="#191918" />
     <meta
       http-equiv="Content-Security-Policy"
       content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' blob:; worker-src 'self' blob:; font-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'"
@@ -26,9 +26,10 @@
         ><i data-i="chevron"></i>
       </button>
       <div class="top-right">
-        <span class="local-pill"><b></b> On device</span
+        <span class="local-pill"
+          ><b></b><span id="runtimeLabel">Local session</span></span
         ><button class="accent-soft" id="modelBtn">
-          <i data-i="cpu"></i><span id="modelBtnLabel">Load model</span>
+          <i data-i="cpu"></i><span id="modelBtnLabel">Models</span>
         </button>
       </div>
     </header>
@@ -68,6 +69,9 @@
             <i data-i="refresh"></i>
           </button>
         </div>
+        <button class="scope-link" id="grantScope">
+          <i data-i="shield"></i> Manage access <i data-i="right"></i>
+        </button>
         <div id="fileTree" class="tree" aria-label="Project files"></div>
         <div class="storage-card">
           <div class="storage-icon"><i data-i="drive"></i></div>
@@ -129,7 +133,8 @@
             <div>
               <i data-i="terminal"></i>
               <h2>Console</h2>
-              <span class="subtag">workspace</span>
+              <span class="subtag">workspace</span
+              ><button id="cliTools" class="cli-tools">CLI tools ↗</button>
             </div>
             <button
               id="clearLog"
@@ -177,59 +182,28 @@
             <i data-i="plus"></i>
           </button>
         </div>
+        <div class="session-tools" aria-label="Session controls">
+          <button id="agentAccess"><i data-i="folder"></i>Access</button
+          ><button id="rules"><i data-i="shield"></i>Rules</button
+          ><button id="team"><i data-i="layers"></i>Team</button>
+        </div>
+        <div class="scope-line" id="scopeStatus">Preparing workspace…</div>
         <div id="transcript" class="transcript" role="log">
           <div id="welcome" class="welcome">
-            <div class="orbit-art" aria-hidden="true">
-              <svg viewBox="0 0 240 100">
-                <g fill="none" stroke="currentColor">
-                  <ellipse
-                    cx="120"
-                    cy="50"
-                    rx="82"
-                    ry="28"
-                    transform="rotate(-12 120 50)"
-                  />
-                  <ellipse
-                    cx="120"
-                    cy="50"
-                    rx="57"
-                    ry="34"
-                    transform="rotate(18 120 50)"
-                  />
-                  <circle
-                    cx="120"
-                    cy="50"
-                    r="40"
-                    stroke-dasharray="2 6"
-                    opacity=".5"
-                  />
-                </g>
-                <g fill="#b9a9ff">
-                  <circle cx="47" cy="74" r="3" />
-                  <circle cx="175" cy="70" r="2" />
-                  <circle cx="160" cy="22" r="2.5" />
-                </g>
-                <path
-                  d="m120 31 17 10v18l-17 10-17-10V41z"
-                  fill="#352b55"
-                  stroke="#c4afff"
-                  stroke-width="1.4"
-                />
-                <path
-                  d="m103 41 17 10 17-10m-17 10v18"
-                  fill="none"
-                  stroke="#c4afff"
-                />
-              </svg>
+            <div class="session-graphic" aria-hidden="true">
+              <span>ORBIT STUDIO</span><span>SESSION / 02</span>
             </div>
-            <div class="eyebrow">LOCAL INTELLIGENCE</div>
-            <h3>Your project copilot.</h3>
+            <div class="eyebrow">ASSISTANT DESK</div>
+            <h3>One task at a time.</h3>
             <p id="welcomeHint">
               Load a model from your device to reason about files and propose
               changes. No API key needed.
             </p>
             <button class="wide" id="setupModel">
-              <i data-i="cpu"></i> Model setup <i data-i="arrow"></i>
+              <i data-i="cpu"></i> Choose a model <i data-i="arrow"></i>
+            </button>
+            <button class="secondary-wide" id="welcomeTeam">
+              <i data-i="layers"></i> Build a team workflow
             </button>
           </div>
         </div>
@@ -246,7 +220,9 @@
               placeholder="Ask about your project…"
             ></textarea>
             <div>
-              <span><i data-i="lock"></i> On-device chat</span
+              <span
+                ><i data-i="lock"></i
+                ><span id="composeDest">On-device chat</span></span
               ><button id="send" aria-label="Send message" title="Send">
                 <i data-i="up"></i>
               </button>
@@ -266,7 +242,7 @@
       <span><b></b> Workspace ready</span
       ><span id="footerProject">Pocket project</span
       ><span class="right"><i data-i="shield"></i> Local workspace</span
-      ><span>ORBIT / 0.1</span>
+      ><span>ORBIT / 0.2</span>
     </footer>
     <dialog id="dialog">
       <div class="dialog-head">
@@ -278,6 +254,16 @@
       <h2 id="dialogTitle"></h2>
       <div id="dialogBody"></div>
       <p id="dialogError" class="error" role="alert"></p>
+    </dialog>
+    <dialog id="consent">
+      <div class="eyebrow">OPERATOR REVIEW</div>
+      <h2 id="reviewTitle"></h2>
+      <p id="reviewDetail"></p>
+      <pre id="reviewPreview" class="review-preview"></pre>
+      <div class="dialog-acts">
+        <button id="reviewDeny">Deny</button
+        ><button class="primary" id="reviewAllow">Allow once</button>
+      </div>
     </dialog>
     <div id="toast" role="status" hidden></div>
     <input id="modelInput" type="file" hidden /><input

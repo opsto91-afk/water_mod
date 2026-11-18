@@ -12,7 +12,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import org.json.JSONObject;
 
-/** Offline WebView shell. Exposes folder-scoped operations, not a generic file/command bridge. */
+/** Packaged UI with explicit document grants and opt-in native provider connections. */
 public final class StationActivity extends Activity {
 
   static WeakReference<StationActivity> current = new WeakReference<
@@ -27,22 +27,47 @@ public final class StationActivity extends Activity {
     Intent.FLAG_GRANT_READ_URI_PERMISSION |
     Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
   private final ExecutorService io = Executors.newSingleThreadExecutor();
-  private final Map<String, String> tickets = new HashMap<String, String>();
+
+  private static final class Receipt {
+
+    String id, probe;
+    PendingIntent callback;
+    Runnable timeout;
+  }
+
+  private final Handler timer = new Handler(Looper.getMainLooper());
+  private final Map<String, Receipt> tickets = new HashMap<String, Receipt>();
   private WebView web;
   private ValueCallback<Uri[]> files;
   private String pickId;
   private volatile Uri tree;
+  private volatile String grantId = UUID.randomUUID().toString();
+  private volatile boolean single = false,
+    writable = true;
+  private boolean pickingFile, pickingWrite;
+  private final CloudClient cloud = new CloudClient();
+  private String checkedAgy = null,
+    interactiveTicket = null;
 
   @Override
   public void onCreate(Bundle state) {
     super.onCreate(state);
     current = new WeakReference<StationActivity>(this);
-    getWindow().setStatusBarColor(0xff171820);
-    getWindow().setNavigationBarColor(0xff171820);
+    getWindow().setStatusBarColor(0xff242321);
+    getWindow().setNavigationBarColor(0xff242321);
     String saved = getPreferences(0).getString("tree", null);
     if (saved != null) tree = Uri.parse(saved);
+    single = getPreferences(0).getBoolean("single", false);
+    writable = getPreferences(0).getBoolean("write", true);
+    io.execute(
+      new Runnable() {
+        public void run() {
+          pruneGrants();
+        }
+      }
+    );
     web = new WebView(this);
-    web.setBackgroundColor(0xff101118);
+    web.setBackgroundColor(0xff191918);
     setContentView(web);
     WebSettings w = web.getSettings();
     w.setJavaScriptEnabled(true);
@@ -145,6 +170,50 @@ public final class StationActivity extends Activity {
               if (!id.matches("[0-9]{1,12}")) return;
               final String key = id,
                 op = q.getString("op");
+              if (op.equals("infer")) {
+                cloud.start(
+                  key,
+                  q,
+                  new CloudClient.Reply() {
+                    public void end(String id, boolean ok, String text) {
+                      reply(id, ok, text);
+                    }
+                  }
+                );
+                return;
+              }
+              if (op.equals("cancelInfer")) {
+                cloud.cancel(q.getString("target"));
+                reply(id, true, true);
+                return;
+              }
+              if (
+                op.equals("keyStatus") ||
+                op.equals("forgetKey") ||
+                op.equals("setKey")
+              ) {
+                final String provider = q.getString("provider");
+                if (!CloudClient.valid(provider)) throw new IOException(
+                  "Unknown provider."
+                );
+                if (op.equals("keyStatus")) {
+                  reply(id, true, cloud.has(provider));
+                  return;
+                }
+                if (op.equals("forgetKey")) {
+                  cloud.forget(provider);
+                  reply(id, true, true);
+                  return;
+                }
+                runOnUiThread(
+                  new Runnable() {
+                    public void run() {
+                      askKey(key, provider);
+                    }
+                  }
+                );
+                return;
+              }
               if (op.equals("modelPage")) {
                 runOnUiThread(
                   new Runnable() {
@@ -172,7 +241,11 @@ public final class StationActivity extends Activity {
                   new Runnable() {
                     public void run() {
                       try {
-                        if (op.equals("pick")) pick(key);
+                        if (op.equals("pick")) pick(
+                          key,
+                          q.optBoolean("single", false),
+                          q.optBoolean("write", false)
+                        );
                         else terminal(key, q);
                       } catch (Exception e) {
                         error(key, e);
@@ -183,7 +256,7 @@ public final class StationActivity extends Activity {
                 return;
               }
               if (op.equals("forget")) {
-                setTree(null);
+                setTree(null, false, false);
                 reply(id, true, true);
                 return;
               }
@@ -192,19 +265,23 @@ public final class StationActivity extends Activity {
                 reply(
                   id,
                   true,
-                  u == null
-                    ? JSONObject.NULL
-                    : new TreeStore(getContentResolver(), u).label()
+                  u == null ? JSONObject.NULL : scopeMeta(u, single, writable)
                 );
                 return;
               }
+              if (!grantId.equals(q.optString("grant"))) throw new IOException(
+                "Workspace changed. Select the file again."
+              );
               if (u == null) throw new IOException(
                 "Choose a project folder first."
               );
               reply(
                 id,
                 true,
-                new TreeStore(getContentResolver(), u).run(op, q)
+                new TreeStore(getContentResolver(), u, single, writable).run(
+                  op,
+                  q
+                )
               );
             } catch (Exception e) {
               error(id, e);
@@ -215,29 +292,122 @@ public final class StationActivity extends Activity {
     }
   }
 
-  private synchronized void setTree(Uri next) {
-    Uri old = tree;
-    tree = next;
-    if (next == null) getPreferences(0).edit().remove("tree").apply();
-    else getPreferences(0).edit().putString("tree", next.toString()).apply();
-    if (old != null && !old.equals(next)) try {
-      getContentResolver().releasePersistableUriPermission(old, GRANTS);
-    } catch (SecurityException ignored) {}
+  private void askKey(final String id, final String provider) {
+    final android.widget.EditText field = new android.widget.EditText(this);
+    field.setSingleLine(true);
+    field.setSaveEnabled(false);
+    field.setImportantForAutofill(
+      android.view.View.IMPORTANT_FOR_AUTOFILL_NO_EXCLUDE_DESCENDANTS
+    );
+    field.setInputType(
+      android.text.InputType.TYPE_CLASS_TEXT |
+        android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
+    );
+    AlertDialog box = new AlertDialog.Builder(this)
+      .setTitle(
+        (provider.equals("claude") ? "Claude" : "DeepSeek") + " API key"
+      )
+      .setMessage(
+        "Kept in memory until Orbit closes. Never included in chat or workflow files. Provider usage may cost money."
+      )
+      .setView(field)
+      .setPositiveButton(
+        "Use for session",
+        new DialogInterface.OnClickListener() {
+          public void onClick(DialogInterface d, int w) {
+            try {
+              cloud.put(provider, field.getText().toString().trim());
+              reply(id, true, true);
+            } catch (Exception e) {
+              error(id, e);
+            } finally {
+              field.getText().clear();
+            }
+          }
+        }
+      )
+      .setNegativeButton(
+        "Cancel",
+        new DialogInterface.OnClickListener() {
+          public void onClick(DialogInterface d, int w) {
+            reply(id, true, false);
+          }
+        }
+      )
+      .create();
+    box.setOnCancelListener(
+      new DialogInterface.OnCancelListener() {
+        public void onCancel(DialogInterface d) {
+          reply(id, true, false);
+        }
+      }
+    );
+    box
+      .getWindow()
+      .addFlags(android.view.WindowManager.LayoutParams.FLAG_SECURE);
+    box.show();
   }
 
-  private void pick(String id) {
+  private JSONObject scopeMeta(Uri u, boolean one, boolean write)
+    throws Exception {
+    return new JSONObject()
+      .put("name", new TreeStore(getContentResolver(), u, one, write).label())
+      .put("single", one)
+      .put("write", write)
+      .put("grant", grantId);
+  }
+
+  // The only persistent Android permission Orbit needs is the active document/tree.
+  private void pruneGrants() {
+    for (UriPermission perm : getContentResolver().getPersistedUriPermissions()) {
+      int held =
+        (perm.isReadPermission() ? Intent.FLAG_GRANT_READ_URI_PERMISSION : 0) |
+        (perm.isWritePermission() ? Intent.FLAG_GRANT_WRITE_URI_PERMISSION : 0);
+      int keep = perm.getUri().equals(tree)
+        ? (writable ? GRANTS : Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        : 0;
+      int release = held & ~keep;
+      if (release != 0) try {
+        getContentResolver().releasePersistableUriPermission(
+          perm.getUri(),
+          release
+        );
+      } catch (SecurityException ignored) {}
+    }
+  }
+
+  private void setTree(Uri next, boolean one, boolean write) {
+    grantId = UUID.randomUUID().toString();
+    tree = next;
+    single = one;
+    writable = write;
+    getPreferences(0)
+      .edit()
+      .putString("tree", next == null ? null : next.toString())
+      .putBoolean("single", one)
+      .putBoolean("write", write)
+      .apply();
+    pruneGrants();
+  }
+
+  private void pick(String id, boolean one, boolean write) {
     if (pickId != null) {
       reply(id, false, "A folder picker is already open.");
       return;
     }
     pickId = id;
+    pickingFile = one;
+    pickingWrite = write;
     try {
-      startActivityForResult(
-        new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
-          GRANTS | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
-        ),
-        TREE
+      Intent pick = new Intent(
+        one ? Intent.ACTION_OPEN_DOCUMENT : Intent.ACTION_OPEN_DOCUMENT_TREE
       );
+      if (one) pick.addCategory(Intent.CATEGORY_OPENABLE).setType("*/*");
+      pick.addFlags(
+        (write ? GRANTS : Intent.FLAG_GRANT_READ_URI_PERMISSION) |
+          Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+      );
+      startActivityForResult(pick, TREE);
     } catch (RuntimeException e) {
       pickId = null;
       error(id, e);
@@ -262,17 +432,24 @@ public final class StationActivity extends Activity {
         return;
       }
       try {
-        if ((data.getFlags() & GRANTS) != GRANTS) throw new IOException(
-          "Select a writable folder."
+        final boolean one = pickingFile,
+          write = pickingWrite;
+        final int flags = write
+          ? GRANTS
+          : Intent.FLAG_GRANT_READ_URI_PERMISSION;
+        if (
+          !"content".equals(u.getScheme()) || (data.getFlags() & flags) != flags
+        ) throw new IOException(
+          "Provider did not grant the requested access. Try read-only."
         );
-        getContentResolver().takePersistableUriPermission(u, GRANTS);
         io.execute(
           new Runnable() {
             public void run() {
               try {
-                String label = new TreeStore(getContentResolver(), u).label();
-                setTree(u);
-                reply(id, true, label);
+                JSONObject meta = scopeMeta(u, one, write);
+                getContentResolver().takePersistableUriPermission(u, flags);
+                setTree(u, one, write);
+                reply(id, true, meta.put("grant", grantId));
               } catch (Exception e) {
                 error(id, e);
               }
@@ -286,9 +463,12 @@ public final class StationActivity extends Activity {
   }
 
   private void terminal(final String id, JSONObject q) throws Exception {
-    String tool = q.getString("tool");
-    if (!tool.equals("wc") && !tool.equals("date")) throw new IOException(
-      "Unsupported terminal tool."
+    final TermuxCommand command = new TermuxCommand(q, checkedAgy);
+    if (command.tool.equals("agy-version")) checkedAgy = null;
+    if (
+      command.interactive && command.capture && interactiveTicket != null
+    ) throw new IOException(
+      "Exit the current captured CLI session before starting another."
     );
     if (checkSelfPermission(PERM) != PackageManager.PERMISSION_GRANTED) {
       try {
@@ -303,79 +483,111 @@ public final class StationActivity extends Activity {
         "Termux access is optional. Grant the permission, enable allow-external-apps in Termux, then retry."
       );
     }
-    String text = q.optString("text", "");
-    if (text.getBytes("UTF-8").length > TreeStore.LIMIT) throw new IOException(
-      "Input too large."
-    );
     final String ticket = UUID.randomUUID().toString();
-    Intent back = new Intent(this, TermuxResult.class)
+    Intent i = new Intent("com.termux.RUN_COMMAND").setClassName(
+      "com.termux",
+      "com.termux.app.RunCommandService"
+    );
+    i.putExtra("com.termux.RUN_COMMAND_PATH", command.path);
+    i.putExtra("com.termux.RUN_COMMAND_BACKGROUND", !command.interactive);
+    if (command.args.length != 0) i.putExtra(
+      "com.termux.RUN_COMMAND_ARGUMENTS",
+      command.args
+    );
+    if (command.stdin != null) i.putExtra(
+      "com.termux.RUN_COMMAND_STDIN",
+      command.stdin
+    );
+    if (command.interactive) i.putExtra(
+      "com.termux.RUN_COMMAND_SESSION_ACTION",
+      "0"
+    );
+    if (!command.capture) {
+      if (startService(i) == null) throw new IOException(
+        "Termux command service not found."
+      );
+      reply(
+        id,
+        true,
+        "Requested interactive agy in Termux (no transcript). If it doesn’t open, tap the Termux notification."
+      );
+      return;
+    }
+    final Intent back = new Intent(this, TermuxResult.class)
       .setData(Uri.parse("orbit:result/" + ticket))
       .putExtra("ticket", ticket);
-    PendingIntent cb = PendingIntent.getBroadcast(
+
+    final PendingIntent cb = PendingIntent.getBroadcast(
       this,
       0,
       back,
       PendingIntent.FLAG_ONE_SHOT |
         (Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0)
     );
-    Intent i = new Intent("com.termux.RUN_COMMAND").setClassName(
-      "com.termux",
-      "com.termux.app.RunCommandService"
-    );
-    i.putExtra(
-      "com.termux.RUN_COMMAND_PATH",
-      "/data/data/com.termux/files/usr/bin/" + tool
-    );
-    i.putExtra("com.termux.RUN_COMMAND_BACKGROUND", true);
     i.putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", cb);
-    if (tool.equals("wc")) i.putExtra("com.termux.RUN_COMMAND_STDIN", text);
-    else i.putExtra("com.termux.RUN_COMMAND_ARGUMENTS", new String[] { "-u" });
-    tickets.put(ticket, id);
+    final Receipt receipt = new Receipt();
+    receipt.id = id;
+    receipt.probe = command.tool.equals("agy-version") ? command.path : null;
+    receipt.callback = cb;
+    tickets.put(ticket, receipt);
+    if (command.interactive) interactiveTicket = ticket;
     try {
       if (startService(i) == null) throw new IOException(
         "Termux command service not found."
       );
     } catch (Exception e) {
       tickets.remove(ticket);
+      if (ticket.equals(interactiveTicket)) interactiveTicket = null;
       cb.cancel();
       throw e;
     }
-    new Handler(Looper.getMainLooper()).postDelayed(
-      new Runnable() {
-        public void run() {
-          String k = tickets.remove(ticket);
-          if (k != null) reply(
-            k,
-            false,
-            "Termux did not reply. Check its permissions and allow-external-apps setting."
-          );
-        }
-      },
-      25000
-    );
+    receipt.timeout = new Runnable() {
+      public void run() {
+        Receipt expired = take(ticket);
+        if (expired != null) reply(
+          expired.id,
+          false,
+          "No Termux callback. Check its permission/allow-external-apps and the selected agy location if applicable."
+        );
+      }
+    };
+    timer.postDelayed(receipt.timeout, command.interactive ? 3600000 : 45000);
+  }
+
+  private Receipt take(String ticket) {
+    Receipt r = tickets.remove(ticket);
+    if (ticket != null && ticket.equals(interactiveTicket)) interactiveTicket =
+      null;
+    if (r != null) {
+      if (r.timeout != null) timer.removeCallbacks(r.timeout);
+      r.callback.cancel();
+    }
+    return r;
   }
 
   void onTermuxResult(Intent data) {
-    String id = tickets.remove(data.getStringExtra("ticket"));
-    if (id == null) return;
+    String ticket = data.getStringExtra("ticket");
+    boolean interactive = ticket != null && ticket.equals(interactiveTicket);
+    Receipt r = take(ticket);
+    if (r == null) return;
+    String id = r.id;
     Bundle b = data.getBundleExtra("result");
     if (b == null) {
       reply(id, false, "Termux returned no result.");
       return;
     }
+    int exit = b.getInt("exitCode", -1);
+    boolean ok = exit == 0 && b.getInt("err", RESULT_OK) == RESULT_OK;
+    String probe = r.probe;
+    if (probe != null) checkedAgy = ok ? probe : null;
     String out =
       b.getString("stdout", "") +
       b.getString("stderr", "") +
       b.getString("errmsg", "");
-    boolean ok =
-      b.getInt("exitCode", -1) == 0 && b.getInt("err", RESULT_OK) == RESULT_OK;
-    reply(
-      id,
-      ok,
-      out.isEmpty()
-        ? "Termux exit: " + b.getInt("exitCode", -1)
-        : out.substring(0, Math.min(8192, out.length()))
-    );
+    if (out.length() > 8192) out = interactive
+      ? "[last 8192 characters]\n" + out.substring(out.length() - 8192)
+      : out.substring(0, 8192) + "\n[output clipped]";
+    reply(id, ok, "Termux exit: " + exit + (out.isEmpty() ? "" : "\n" + out));
   }
 
   private void error(String id, Exception e) {
@@ -441,7 +653,10 @@ public final class StationActivity extends Activity {
   protected void onDestroy() {
     if (current.get() == this) current.clear();
     if (files != null) files.onReceiveValue(null);
+    cloud.close();
     io.shutdownNow();
+    timer.removeCallbacksAndMessages(null);
+    for (Receipt r : tickets.values()) r.callback.cancel();
     tickets.clear();
     web.removeJavascriptInterface("OrbitHost");
     web.destroy();
