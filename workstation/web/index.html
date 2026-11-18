@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#101119" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' blob:; worker-src 'self' blob:; font-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'"
+    />
+    <title>Orbit · Workstation</title>
+    <link rel="icon" href="./orbit.svg" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body data-view="editor">
+    <header class="top">
+      <div class="brand">
+        <img src="./orbit.svg" alt="" /><strong>Orbit</strong
+        ><span>Workstation</span>
+      </div>
+      <button id="workspace" class="project-pill">
+        <i data-i="layers"></i><span id="projectLabel">Pocket project</span
+        ><i data-i="chevron"></i>
+      </button>
+      <div class="top-right">
+        <span class="local-pill"><b></b> On device</span
+        ><button class="accent-soft" id="modelBtn">
+          <i data-i="cpu"></i><span id="modelBtnLabel">Load model</span>
+        </button>
+      </div>
+    </header>
+    <main class="desk">
+      <aside id="filesPanel" class="files panel">
+        <div class="panel-head">
+          <div>
+            <div class="eyebrow">WORKSPACE</div>
+            <h2>Explorer</h2>
+          </div>
+          <div class="actions">
+            <button
+              class="icon-btn"
+              id="newFile"
+              title="New file"
+              aria-label="New file"
+            >
+              <i data-i="newfile"></i></button
+            ><button
+              class="icon-btn"
+              id="newFolder"
+              title="New folder"
+              aria-label="New folder"
+            >
+              <i data-i="newfolder"></i>
+            </button>
+          </div>
+        </div>
+        <div class="tree-root">
+          <i data-i="branch"></i><span id="rootLabel">Pocket project</span
+          ><button
+            class="icon-btn"
+            id="reloadTree"
+            title="Refresh files"
+            aria-label="Refresh files"
+          >
+            <i data-i="refresh"></i>
+          </button>
+        </div>
+        <div id="fileTree" class="tree" aria-label="Project files"></div>
+        <div class="storage-card">
+          <div class="storage-icon"><i data-i="drive"></i></div>
+          <div>
+            <strong id="diskKind">App storage</strong
+            ><small>Project workspace</small>
+          </div>
+          <button
+            id="switchDisk"
+            class="icon-btn"
+            aria-label="Switch workspace"
+            title="Switch workspace"
+          >
+            <i data-i="swap"></i>
+          </button>
+        </div>
+      </aside>
+      <section class="middle">
+        <section id="editorPanel" class="editor panel">
+          <div class="editor-tabs">
+            <span class="active-tab"
+              ><i data-i="file"></i><span id="tabName">Editor</span
+              ><b id="dirtyDot" hidden>●</b></span
+            ><span class="mode-label">EDITOR</span>
+          </div>
+          <div class="editor-bar">
+            <span id="crumb"
+              ><i data-i="folder"></i
+              ><span id="editorPath">No file open</span></span
+            ><button id="save" title="Save (Ctrl+S)" disabled>
+              <i data-i="save"></i> Save
+            </button>
+          </div>
+          <div class="edit-body">
+            <div id="gutter" aria-hidden="true"><pre id="lineNos">1</pre></div>
+            <div class="edit-stack">
+              <pre id="highlight" aria-hidden="true"></pre>
+              <textarea
+                id="code"
+                maxlength="65536"
+                aria-label="File editor"
+                autocorrect="off"
+                autocapitalize="off"
+                autocomplete="off"
+                spellcheck="false"
+                wrap="off"
+                disabled
+                placeholder="Choose a file in Explorer."
+              ></textarea>
+            </div>
+          </div>
+          <div class="editor-info">
+            <span id="lang">Plain text</span
+            ><span id="position">Ln 1, Col 1</span><span>UTF-8</span>
+          </div>
+        </section>
+        <section id="consolePanel" class="console panel">
+          <div class="console-head">
+            <div>
+              <i data-i="terminal"></i>
+              <h2>Console</h2>
+              <span class="subtag">workspace</span>
+            </div>
+            <button
+              id="clearLog"
+              class="icon-btn"
+              title="Clear output"
+              aria-label="Clear output"
+            >
+              <i data-i="eraser"></i>
+            </button>
+          </div>
+          <div id="log" class="log" role="log"></div>
+          <form id="cmdForm" class="cmd">
+            <span>❯</span
+            ><input
+              id="cmd"
+              maxlength="800"
+              aria-label="Workspace command"
+              autocapitalize="off"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="Type a command, or help"
+            /><button
+              class="icon-btn"
+              title="Run command"
+              aria-label="Run command"
+            >
+              <i data-i="return"></i>
+            </button>
+          </form>
+        </section>
+      </section>
+      <aside id="assistPanel" class="assistant panel">
+        <div class="agent-head">
+          <div class="agent-mark"><i data-i="spark"></i></div>
+          <div>
+            <h2>Orbit assistant</h2>
+            <small id="agentStatus">Local inference</small>
+          </div>
+          <button
+            id="clearChat"
+            class="icon-btn"
+            title="New conversation"
+            aria-label="New conversation"
+          >
+            <i data-i="plus"></i>
+          </button>
+        </div>
+        <div id="transcript" class="transcript" role="log">
+          <div id="welcome" class="welcome">
+            <div class="orbit-art" aria-hidden="true">
+              <svg viewBox="0 0 240 100">
+                <g fill="none" stroke="currentColor">
+                  <ellipse
+                    cx="120"
+                    cy="50"
+                    rx="82"
+                    ry="28"
+                    transform="rotate(-12 120 50)"
+                  />
+                  <ellipse
+                    cx="120"
+                    cy="50"
+                    rx="57"
+                    ry="34"
+                    transform="rotate(18 120 50)"
+                  />
+                  <circle
+                    cx="120"
+                    cy="50"
+                    r="40"
+                    stroke-dasharray="2 6"
+                    opacity=".5"
+                  />
+                </g>
+                <g fill="#b9a9ff">
+                  <circle cx="47" cy="74" r="3" />
+                  <circle cx="175" cy="70" r="2" />
+                  <circle cx="160" cy="22" r="2.5" />
+                </g>
+                <path
+                  d="m120 31 17 10v18l-17 10-17-10V41z"
+                  fill="#352b55"
+                  stroke="#c4afff"
+                  stroke-width="1.4"
+                />
+                <path
+                  d="m103 41 17 10 17-10m-17 10v18"
+                  fill="none"
+                  stroke="#c4afff"
+                />
+              </svg>
+            </div>
+            <div class="eyebrow">LOCAL INTELLIGENCE</div>
+            <h3>Your project copilot.</h3>
+            <p id="welcomeHint">
+              Load a model from your device to reason about files and propose
+              changes. No API key needed.
+            </p>
+            <button class="wide" id="setupModel">
+              <i data-i="cpu"></i> Model setup <i data-i="arrow"></i>
+            </button>
+          </div>
+        </div>
+        <div class="agent-bottom">
+          <button id="attach" class="context-btn" aria-pressed="false">
+            <i data-i="clip"></i><span>Include open file</span>
+          </button>
+          <form id="chatForm" class="composer">
+            <textarea
+              id="message"
+              maxlength="4000"
+              aria-label="Message to assistant"
+              rows="2"
+              placeholder="Ask about your project…"
+            ></textarea>
+            <div>
+              <span><i data-i="lock"></i> On-device chat</span
+              ><button id="send" aria-label="Send message" title="Send">
+                <i data-i="up"></i>
+              </button>
+            </div>
+          </form>
+        </div>
+      </aside>
+    </main>
+    <nav class="mobile-nav" aria-label="Workstation panels">
+      <button data-tab="files"><i data-i="folder"></i>Files</button
+      ><button data-tab="editor" aria-current="page">
+        <i data-i="code"></i>Editor</button
+      ><button data-tab="console"><i data-i="terminal"></i>Console</button
+      ><button data-tab="assistant"><i data-i="spark"></i>Assistant</button>
+    </nav>
+    <footer class="status">
+      <span><b></b> Workspace ready</span
+      ><span id="footerProject">Pocket project</span
+      ><span class="right"><i data-i="shield"></i> Local workspace</span
+      ><span>ORBIT / 0.1</span>
+    </footer>
+    <dialog id="dialog">
+      <div class="dialog-head">
+        <span class="eyebrow" id="dialogTag">WORKSTATION</span
+        ><button class="icon-btn" id="closeDialog" aria-label="Close">
+          <i data-i="close"></i>
+        </button>
+      </div>
+      <h2 id="dialogTitle"></h2>
+      <div id="dialogBody"></div>
+      <p id="dialogError" class="error" role="alert"></p>
+    </dialog>
+    <div id="toast" role="status" hidden></div>
+    <input id="modelInput" type="file" hidden /><input
+      id="importInput"
+      type="file"
+      hidden
+      multiple
+    />
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

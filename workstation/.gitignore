@@ -1,0 +1,6 @@
+node_modules/
+build/
+*.keystore
+*.p12
+*.idsig
+*.gguf

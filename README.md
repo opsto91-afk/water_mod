@@ -53,3 +53,9 @@ Mod Menu -> "Water Tweaks": toggle + sliders (water delay, lava delay overworld 
   verification on a phone.
 * `mprotect` on the game's code pages may be refused on some devices.
 * Offsets are for ONE Minecraft build. A signature scan is the next step to survive updates.
+
+## Separate Android workstation
+
+[Orbit Workstation](workstation/README.md) is a standalone Android app with a project explorer, editor, console and on-device GGUF assistant. [Install the APK](workstation/Orbit-Workstation.apk). It needs no paid AI API and is independent of the Minecraft mod build.
+
+The earlier [Pocket Bridge](pocket_bridge/README.md) remains available as a manual Termux companion for an existing DeepSeek chat.
