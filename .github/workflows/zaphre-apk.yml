@@ -1,0 +1,88 @@
+name: ZaphRE APK Build
+
+on:
+  push:
+    paths:
+      - "zaphre/**"
+      - ".github/workflows/zaphre-apk.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-host-tests:
+    name: C++17 ELF Analyzer Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compile & run C++17 ELF analyzer unit tests
+        run: |
+          g++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            zaphre/app/src/main/cpp/elf_analyzer.cpp \
+            zaphre/tests/test_elf_analyzer.cpp \
+            -o /tmp/test_elf_analyzer
+          /tmp/test_elf_analyzer
+
+  build-apk:
+    name: Build ZaphRE arm64-v8a APK (Levi v1.7.1 Runtime)
+    needs: native-host-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch official LeviLauncher v1.7.1 arm64-v8a runtime libraries
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/levi_release zaphre/app/src/main/jniLibs/arm64-v8a
+          gh release download v1.7.1 \
+            --repo LiteLDev/LeviLauncher-Android \
+            --pattern "LeviLauncher-v1.7.1-release.apk" \
+            --dir /tmp/levi_release \
+            --clobber
+          unzip -o -j /tmp/levi_release/LeviLauncher-v1.7.1-release.apk \
+            "lib/arm64-v8a/libPlayFabMultiplayer.so" \
+            "lib/arm64-v8a/libmaesdk.so" \
+            "lib/arm64-v8a/libHttpClient.Android.so" \
+            "lib/arm64-v8a/libpreloader.so" \
+            -d zaphre/app/src/main/jniLibs/arm64-v8a/
+          ls -lh zaphre/app/src/main/jniLibs/arm64-v8a/
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK & NDK 27
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "platforms;android-35 build-tools;35.0.0 ndk;27.2.12479018 cmake;3.22.1"
+
+      - name: Set up Gradle 8.11.1
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.11.1"
+
+      - name: Run Kotlin Unit Tests
+        working-directory: zaphre
+        run: gradle :app:testDebugUnitTest --no-daemon
+
+      - name: Build Signed Installable ZaphRE APK (arm64-v8a)
+        working-directory: zaphre
+        run: |
+          gradle :app:assembleRelease :app:assembleDebug --no-daemon --stacktrace
+          mkdir -p dist
+          cp app/build/outputs/apk/release/app-release.apk dist/ZaphRE-v1.0.0-arm64.apk
+          echo "=== Verified native libraries inside ZaphRE-v1.0.0-arm64.apk ==="
+          unzip -l dist/ZaphRE-v1.0.0-arm64.apk "lib/arm64-v8a/*"
+          ls -lh dist/ZaphRE-v1.0.0-arm64.apk
+
+      - name: Upload ZaphRE APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ZaphRE-v1.0.0-arm64
+          path: zaphre/dist/ZaphRE-v1.0.0-arm64.apk
+          if-no-files-found: error

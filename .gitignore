@@ -1,3 +1,14 @@
 build/
 dist/
 tests/patch_test
+zaphre/.gradle/
+zaphre/build/
+zaphre/app/build/
+zaphre/app/.cxx/
+zaphre/app/src/main/jniLibs/
+zaphre/local.properties
+zaphre/tests/test_elf_analyzer
+*libZaphkiel*.so
+*libZaphkiel*.so.txt
+*.jks
+*.keystore

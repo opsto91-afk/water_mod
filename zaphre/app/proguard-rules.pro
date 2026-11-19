@@ -1,0 +1,5 @@
+-keep class org.levimc.zaphre.bridge.** { *; }
+-keep class org.fmod.** { *; }
+-keep class com.mojang.** { *; }
+-dontwarn okhttp3.**
+-dontwarn okio.**

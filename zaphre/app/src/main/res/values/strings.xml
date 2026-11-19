@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">ZaphRE</string>
+    <string name="bg_channel_name">ZaphRE Background MC Runner</string>
+    <string name="bg_channel_desc">Hosts Minecraft native runtime and Zaphkiel RE sessions in the background</string>
+</resources>
