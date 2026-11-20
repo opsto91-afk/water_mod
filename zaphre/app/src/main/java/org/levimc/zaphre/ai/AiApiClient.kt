@@ -603,7 +603,7 @@ object AiApiClient {
                 val mandatory = required != null && (0 until required.length()).any { required.optString(it) == name }
                 name + if (mandatory) "*:" + type + itemType else ":" + type + itemType
             })
-            appendLine(")")
+            append(") ").appendLine(tool.description.take(140))
         }
         appendLine("Use get_env_status before RE. Do not invent results. For ordinary chat answer directly.")
     }

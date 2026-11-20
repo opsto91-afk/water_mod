@@ -6,13 +6,13 @@ A strictly **Portrait (9:16)** ChatGPT-style Android RE workstation (Ghidra-MCP 
 - **Separate Portrait Sections (6 Tabs):**
   1. **Chat:** ChatGPT-style autonomous RE loop with live collapsible tool cards, copyable code/signature blocks, and saved session drawer.
   2. **BG Run:** Live background `:mcre` process monitor (PID, RSS MB, `libminecraftpe.so` base VA, `10s / 15s / 30s / 1m / 5m / Custom` watchdog timers, auto-stop on `run() complete`, 1-second hot re-runs, live `zaphkiel_log.txt` & crash tracer), MC APK/`.so` + `libZaphkiel.so` (`.so.txt` / `.levipack`) importer, and full `zaphkiel_config.txt` / `zInput.txt` / `sig_targets.txt` editors with presets.
-  3. **Files:** Full RE workspace file manager (`Android/media/org.levimc.zaphr2/zaphkiel/` or shared `Android/media/org.levimc.launcher/kurumi/`) with 100 MB+ chunked dump viewer, in-file grep, editor, import & share.
+  3. **Files:** Full RE workspace file manager (`Android/media/org.levimc.zaphr3/zaphkiel/` or shared `Android/media/org.levimc.launcher/kurumi/`) with 100 MB+ chunked dump viewer, in-file grep, editor, import & share.
   4. **CMD:** Built-in Linux toybox shell (`grep`, `awk`, `sed`, `strings`, `xxd`, `find`) + 1-command localhost **Termux Bridge** (`python3`, `rg`, `readelf`, `llvm-objdump`, `clang++`, `radare2`) shared with the AI agent.
   5. **Models:** Download, import, load and manage local GGUF models.
   6. **AI:** All major online APIs (**Google Gemini**, **OpenRouter**, **OpenAI**, **Anthropic Claude**, **DeepSeek**, **Groq**, **xAI Grok**, **Mistral**, custom OpenAI-compatible URL) + **Local AI** (**Termux `llama.cpp`**, **Ollama**, **LM Studio**) with live model fetching and automatic `<tool_call>` XML fallback for small local GGUF models.
 
 ## First-Time Phone Setup (60 seconds)
-1. Download `ZaphRE-v2.1.1-side-by-side-arm64.apk` from the release and install it. Its package `org.levimc.zaphr2` is separate from older ZaphRE installs; old chats, models and settings do not transfer automatically.
+1. Download `ZaphRE-v3.0.0-side-by-side-arm64.apk` from the release and install it. Its package `org.levimc.zaphr3` is separate from older ZaphRE installs; old chats, models and settings do not transfer automatically.
 2. Open **BG Run → Setup**:
    - Select your installed Minecraft (or tap **Import APK / .SO** for an isolated copy).
    - Tap **Import `libZaphkiel.so`** (even `libZaphkiel.so.txt` works — `.txt` is stripped automatically).
@@ -29,7 +29,10 @@ The Models tab contains a CPU-only GGUF runtime based on the pinned upstream lla
 The Models tab includes a small curated coding/reasoning catalogue, a direct HTTPS GGUF URL field, and Android document-picker import. Downloads continue while navigating within the app but not after the app process is stopped; cancelled or interrupted downloads restart from the beginning. Load a downloaded model to select the built-in CPU provider automatically. Models are stored in app-private storage and deleted when the app is uninstalled, so keep an external backup. CPU threads, context window and output limit are configurable. Local generation streams partial text and Stop requests a CPU inference abort; blocking tools and remote services may take longer to stop. Local model tool calling uses an XML fallback and depends heavily on model capabilities; validate all outputs and review autonomous commands. GPU/NPU and Fluent's entire model catalogue are not included.
 
 ### Side-by-side package
-Version 2.1.1 uses the separate Android package `org.levimc.zaphr2` and a separate 61-byte Zaphkiel workspace path. It can be installed without uninstalling an earlier `org.levimc.zaphre` build. App-private chats, model files, settings and imports are not migrated automatically. GitHub Actions uses a debug signing key on an ephemeral runner, so later builds may not be able to update an installed APK; back up important data before uninstalling anything.
+Version 3.0.0 uses the separate Android package `org.levimc.zaphr3` and a separate 61-byte Zaphkiel workspace path. It can be installed without uninstalling an earlier `org.levimc.zaphre` build. App-private chats, model files, settings and imports are not migrated automatically. GitHub Actions uses a debug signing key on an ephemeral runner, so later builds may not be able to update an installed APK; back up important data before uninstalling anything.
 
 ### Offline troubleshooting (development changes)
 The built-in model gets compact tool schemas to reduce its system-prompt context cost; actual available space depends on the model tokenizer, configured context, custom instructions and output budget. Native system-prefill failures and context overflow are reported separately. Load or reload a model after changing context. Model download status and cancellation are also displayed near the catalogue. Downloads need internet, enough free app storage and a direct public GGUF URL; offline inference itself does not require an API key. These changes require testing on a device and do not guarantee all models or tool calls will work.
+
+### Optional web search (v3)
+In AI settings, web search is off by default. Enable it to let the agent send search queries to DuckDuckGo for links and snippets; internet is required even with an offline model. Avoid private queries. The service can block requests or change its page format; results are untrusted, and tool support depends on the model. Search is not a browser and does not fetch full pages.

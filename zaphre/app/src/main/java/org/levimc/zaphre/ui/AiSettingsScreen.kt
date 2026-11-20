@@ -6,6 +6,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
 import org.levimc.zaphre.ai.LocalLlama
+import org.levimc.zaphre.ai.WebSearch
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -99,6 +100,7 @@ fun AiSettingsScreen(vm: MainViewModel) {
     var autoStopLoop by remember { mutableStateOf(saved.autoStopMcAfterLoop) }
     var customPrompt by remember { mutableStateOf(saved.customPrompt) }
     var showKey by remember { mutableStateOf(false) }
+    var webSearchEnabled by remember { mutableStateOf(WebSearch.enabled(context)) }
 
     LaunchedEffect(saved) {
         baseUrl = saved.baseUrl
@@ -137,6 +139,21 @@ fun AiSettingsScreen(vm: MainViewModel) {
                 fontSize = 11.sp,
                 color = ZaphSubtext
             )
+        }
+
+        item {
+            Surface(shape = RoundedCornerShape(14.dp), color = ZaphSurface) {
+                Column(Modifier.fillMaxWidth().padding(14.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Web search (optional)", modifier = Modifier.weight(1f), color = ZaphText)
+                        Switch(checked = webSearchEnabled, onCheckedChange = {
+                            webSearchEnabled = it
+                            WebSearch.setEnabled(context, it)
+                        })
+                    }
+                    Text("Off by default. When enabled, AI search queries are sent to DuckDuckGo over the internet, including when using an offline model. Search results may be inaccurate or unavailable; avoid private data.", color = ZaphSubtext, fontSize = 11.sp)
+                }
+            }
         }
 
         // Online Providers

@@ -108,6 +108,8 @@ fun LocalModelsScreen(vm: MainViewModel) {
             Slider(value = options.context.toFloat(), onValueChange = { LocalLlama.saveOptions(context, options.copy(context = (it / 1024).toInt() * 1024)) }, valueRange = 2048f..16384f, steps = 13)
             Text("CPU threads: ${options.threads} · reload model to apply", color = ZaphSubtext, fontSize = 12.sp)
             Slider(value = options.threads.toFloat(), onValueChange = { LocalLlama.saveOptions(context, options.copy(threads = it.toInt())) }, valueRange = 1f..8f, steps = 6)
+            Text("Temperature: ${"%.1f".format(options.temperature)} · reload model to apply", color = ZaphSubtext, fontSize = 12.sp)
+            Slider(value = options.temperature, onValueChange = { LocalLlama.saveOptions(context, options.copy(temperature = it)) }, valueRange = 0f..1.5f)
             Text("Max output: ${options.maxTokens} tokens", color = ZaphSubtext, fontSize = 12.sp)
             Slider(value = options.maxTokens.toFloat(), onValueChange = { LocalLlama.saveOptions(context, options.copy(maxTokens = (it / 128).toInt() * 128)) }, valueRange = 128f..2048f, steps = 14)
             Text("Larger contexts use more RAM. GPU/NPU acceleration and vision are not available in this build.", color = ZaphSubtext, fontSize = 11.sp)

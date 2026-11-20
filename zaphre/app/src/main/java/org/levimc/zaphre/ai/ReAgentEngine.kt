@@ -29,7 +29,7 @@ object ReAgentEngine {
         } else {
             ReSystemPrompt.build(wsPath, settings.customPrompt)
         }
-        val tools = ReTools.schemas()
+        val tools = ReTools.schemas().filter { it.name != "web_search" || WebSearch.enabled(appCtx) }
 
         // Rebuild conversation history cleanly (keep last 18 messages to preserve context budget)
         val history = mutableListOf<AgentTurnItem>()

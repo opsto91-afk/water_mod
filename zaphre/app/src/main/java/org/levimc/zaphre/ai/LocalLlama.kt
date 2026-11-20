@@ -25,7 +25,7 @@ import java.util.concurrent.TimeUnit
 object LocalLlama {
     private external fun init(nativeLibDir: String)
     private external fun load(modelPath: String): Int
-    private external fun prepare(contextSize: Int, threads: Int): Int
+    private external fun prepare(contextSize: Int, threads: Int, temperature: Float): Int
     private external fun abortGeneration()
     private external fun clearAbort()
     private external fun processSystemPrompt(systemPrompt: String): Int
@@ -43,17 +43,17 @@ object LocalLlama {
     @Volatile private var initialized = false
     val transferring = MutableStateFlow(false)
     val loaded = MutableStateFlow<String?>(null)
-    data class Options(val context: Int = 8192, val threads: Int = 4, val maxTokens: Int = 512)
+    data class Options(val context: Int = 8192, val threads: Int = 4, val maxTokens: Int = 512, val temperature: Float = 0.3f)
     val options = MutableStateFlow(Options())
     fun restoreOptions(context: Context) {
         val p = context.getSharedPreferences("local_llama_options", Context.MODE_PRIVATE)
-        options.value = Options(p.getInt("context", 8192).coerceIn(2048, 16384), p.getInt("threads", 4).coerceIn(1, 8), p.getInt("tokens", 512).coerceIn(128, 2048))
+        options.value = Options(p.getInt("context", 8192).coerceIn(2048, 16384), p.getInt("threads", 4).coerceIn(1, 8), p.getInt("tokens", 512).coerceIn(128, 2048), p.getFloat("temperature", 0.3f).coerceIn(0f, 1.5f))
     }
     fun saveOptions(context: Context, value: Options) {
-        val v = Options(value.context.coerceIn(2048, 16384), value.threads.coerceIn(1, 8), value.maxTokens.coerceIn(128, 2048))
-        context.getSharedPreferences("local_llama_options", Context.MODE_PRIVATE).edit().putInt("context", v.context).putInt("threads", v.threads).putInt("tokens", v.maxTokens).apply()
+        val v = Options(value.context.coerceIn(2048, 16384), value.threads.coerceIn(1, 8), value.maxTokens.coerceIn(128, 2048), value.temperature.coerceIn(0f, 1.5f))
+        context.getSharedPreferences("local_llama_options", Context.MODE_PRIVATE).edit().putInt("context", v.context).putInt("threads", v.threads).putInt("tokens", v.maxTokens).putFloat("temperature", v.temperature).apply()
         options.value = v
-        status.value = "Settings saved; reload model to apply context and threads"
+        status.value = "Settings saved; reload model to apply context, threads and temperature"
     }
     fun cancelInference() { if (initialized) abortGeneration() }
     @Synchronized fun startDownload(context: Context, item: CatalogueItem) {
@@ -131,11 +131,19 @@ object LocalLlama {
                 if (!response.isSuccessful) throw IOException("Download HTTP ${response.code}")
                 val body = response.body ?: throw IOException("Empty download")
                 val total = body.contentLength()
+                if (total > 0 && total > folder(context).usableSpace) throw IOException("Not enough free storage for this model (${total / 1048576} MB required)")
                 body.byteStream().use { input -> part.outputStream().use { out ->
                     val buf = ByteArray(128 * 1024); var count = 0L; var last = 0L
+                    val magic = ByteArray(4); var magicCount = 0
                     while (true) {
                         currentCoroutineContext().ensureActive()
                         val n = input.read(buf); if (n < 0) break
+                        if (magicCount < 4) {
+                            val copied = minOf(4 - magicCount, n)
+                            System.arraycopy(buf, 0, magic, magicCount, copied); magicCount += copied
+                            if (magicCount == 4 && !magic.contentEquals(byteArrayOf(0x47, 0x47, 0x55, 0x46)))
+                                throw IOException("Download is not a GGUF file. Use a public direct file URL, not a model page or login link.")
+                        }
                         out.write(buf, 0, n); count += n
                         if (count - last >= 4 * 1024 * 1024) { status.value = "Downloading: ${count / 1048576} MB" + if (total > 0) " / ${total / 1048576} MB" else ""; last = count }
                     }
@@ -155,7 +163,7 @@ object LocalLlama {
         if (loadedPath != null) { unload(); loadedPath = null; loaded.value = null }
         status.value = "Loading $name…"
         if (load(file.absolutePath) != 0) throw IOException("Could not load this model architecture")
-        if (prepare(options.value.context, options.value.threads) != 0) throw IOException("Could not create model context; try a smaller model")
+        if (prepare(options.value.context, options.value.threads, options.value.temperature) != 0) throw IOException("Could not create model context; try a smaller model")
         loadedPath = file.absolutePath
         loaded.value = name
         status.value = "Ready: $name (CPU)"

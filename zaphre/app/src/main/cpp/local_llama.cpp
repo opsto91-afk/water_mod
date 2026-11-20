@@ -113,7 +113,7 @@ static common_sampler *new_sampler(float temp) {
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_org_levimc_zaphre_ai_LocalLlama_prepare(JNIEnv * /*env*/, jobject /*unused*/, jint context_size, jint threads) {
+Java_org_levimc_zaphre_ai_LocalLlama_prepare(JNIEnv * /*env*/, jobject /*unused*/, jint context_size, jint threads, jfloat temperature) {
     g_context_size = std::max(2048, std::min(16384, (int)context_size));
     g_threads = std::max(1, std::min(8, (int)threads));
     g_abort.store(false);
@@ -122,7 +122,7 @@ Java_org_levimc_zaphre_ai_LocalLlama_prepare(JNIEnv * /*env*/, jobject /*unused*
     g_context = context;
     g_batch = common_batch(context);
     g_chat_templates = common_chat_templates_init(g_model, "");
-    g_sampler = new_sampler(DEFAULT_SAMPLER_TEMP);
+    g_sampler = new_sampler(std::max(0.0f, std::min(1.5f, (float) temperature)));
     return 0;
 }
 
@@ -522,6 +522,10 @@ Java_org_levimc_zaphre_ai_LocalLlama_generateNextToken(
     g_batch.add(new_token_id, current_position, 0, true);
     if (llama_process(g_context, LLAMA_PROCESS_TYPE_DECODE, g_batch.get()) != 0) {
         LOGe("%s: llama_decode() failed for generated token", __func__);
+        if (!g_abort.load(std::memory_order_relaxed)) {
+            jclass exception_class = env->FindClass("java/io/IOException");
+            if (exception_class) env->ThrowNew(exception_class, "Local model failed while generating a token; try reloading or reducing memory use.");
+        }
         return nullptr;
     }
 

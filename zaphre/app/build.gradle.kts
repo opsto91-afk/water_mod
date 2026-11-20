@@ -10,11 +10,11 @@ android {
     ndkVersion = "27.2.12479018"
 
     defaultConfig {
-        applicationId = "org.levimc.zaphr2"
+        applicationId = "org.levimc.zaphr3"
         minSdk = 28
         targetSdk = 35
-        versionCode = 4
-        versionName = "2.1.1"
+        versionCode = 5
+        versionName = "3.0.0"
 
         ndk {
             abiFilters += "arm64-v8a"
@@ -97,6 +97,7 @@ dependencies {
 
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("org.jsoup:jsoup:1.18.3")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
