@@ -128,7 +128,8 @@ fun ChatScreen(
     val mods by vm.installedMods.collectAsState()
 
     val hasZaphkiel = mods.any { it.isZaphkiel }
-    val hasAiReady = aiSettings.preset.isLocal || aiSettings.apiKey.isNotBlank()
+    val localLoaded by org.levimc.zaphre.ai.LocalLlama.loaded.collectAsState()
+    val hasAiReady = if (aiSettings.providerId == "local_builtin") localLoaded != null else aiSettings.preset.isLocal || aiSettings.apiKey.isNotBlank()
 
     var inputText by rememberSaveable { mutableStateOf("") }
     val drawerState = rememberDrawerState(DrawerValue.Closed)

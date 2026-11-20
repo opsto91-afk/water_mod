@@ -193,19 +193,8 @@ fun AiSettingsScreen(vm: MainViewModel) {
 
         if (saved.providerId == "local_builtin") {
             item {
-                Surface(shape = RoundedCornerShape(14.dp), color = ZaphSurface, border = BorderStroke(1.dp, ZaphBorder), modifier = Modifier.fillMaxWidth()) {
-                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("On-device GGUF models · CPU", color = ZaphText, fontWeight = FontWeight.Bold)
-                        Text("Download or import a model, then Load. Model files stay on this device; RAM and storage required.", color = ZaphSubtext, fontSize = 12.sp)
-                        Text(localStatus, color = ZaphAccent, fontSize = 12.sp)
-                        OutlinedButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) { Text("Import GGUF from device") }
-                        LocalLlama.catalogue.forEach { item ->
-                            OutlinedButton(onClick = { scope.launch { runCatching { LocalLlama.download(context, item) }.onFailure { LocalLlama.status.value = "Download failed: ${it.message}" } } }) { Text("Download ${item.name}", fontSize = 12.sp) }
-                        }
-                        localModels.forEach { name ->
-                            OutlinedButton(onClick = { scope.launch { runCatching { LocalLlama.select(context, name) }.onFailure { LocalLlama.status.value = "Load failed: ${it.message}" } } }) { Text("Load $name", fontSize = 12.sp) }
-                        }
-                    }
+                OutlinedButton(onClick = { vm.selectTab(MainTab.MODELS) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Open Models: download, import and load GGUF")
                 }
             }
         }

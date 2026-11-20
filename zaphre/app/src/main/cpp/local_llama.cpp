@@ -2,6 +2,7 @@
 #include <jni.h>
 #include <iomanip>
 #include <cmath>
+#include <atomic>
 #include <string>
 #include <unistd.h>
 #include <sampling.h>
@@ -28,7 +29,9 @@ constexpr int   N_THREADS_MIN           = 2;
 constexpr int   N_THREADS_MAX           = 4;
 constexpr int   N_THREADS_HEADROOM      = 2;
 
-constexpr int   DEFAULT_CONTEXT_SIZE    = 8192;
+static int      g_context_size = 8192;
+static int      g_threads = 4;
+static std::atomic<bool> g_abort{false};
 constexpr int   OVERFLOW_HEADROOM       = 4;
 constexpr int   BATCH_SIZE              = 512;
 constexpr float DEFAULT_SAMPLER_TEMP    = 0.3f;
@@ -73,17 +76,13 @@ Java_org_levimc_zaphre_ai_LocalLlama_load(JNIEnv *env, jobject, jstring jmodel_p
     return 0;
 }
 
-static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT_CONTEXT_SIZE) {
+static llama_context *init_context(llama_model *model, const int n_ctx = 8192) {
     if (!model) {
         LOGe("%s: model cannot be null", __func__);
         return nullptr;
     }
 
-    // Multi-threading setup
-    const int n_threads = std::max(N_THREADS_MIN, std::min(N_THREADS_MAX,
-                                                     (int) sysconf(_SC_NPROCESSORS_ONLN) -
-                                                     N_THREADS_HEADROOM));
-    LOGi("%s: Using %d threads", __func__, n_threads);
+    const int n_threads = g_threads;
 
     // Context parameters setup
     llama_context_params ctx_params = llama_context_default_params();
@@ -97,6 +96,8 @@ static llama_context *init_context(llama_model *model, const int n_ctx = DEFAULT
     ctx_params.n_ubatch = BATCH_SIZE;
     ctx_params.n_threads = n_threads;
     ctx_params.n_threads_batch = n_threads;
+    ctx_params.abort_callback = [](void *) { return g_abort.load(std::memory_order_relaxed); };
+    ctx_params.abort_callback_data = nullptr;
     auto *context = llama_init_from_model(g_model, ctx_params);
     if (context == nullptr) {
         LOGe("%s: llama_init_from_model() returned null)", __func__);
@@ -112,8 +113,11 @@ static common_sampler *new_sampler(float temp) {
 
 extern "C"
 JNIEXPORT jint JNICALL
-Java_org_levimc_zaphre_ai_LocalLlama_prepare(JNIEnv * /*env*/, jobject /*unused*/) {
-    auto *context = init_context(g_model);
+Java_org_levimc_zaphre_ai_LocalLlama_prepare(JNIEnv * /*env*/, jobject /*unused*/, jint context_size, jint threads) {
+    g_context_size = std::max(2048, std::min(16384, (int)context_size));
+    g_threads = std::max(1, std::min(8, (int)threads));
+    g_abort.store(false);
+    auto *context = init_context(g_model, g_context_size);
     if (!context) { llama_model_free(g_model); g_model = nullptr; return 1; }
     g_context = context;
     g_batch = common_batch(context);
@@ -327,7 +331,7 @@ static int decode_tokens_in_batches(
         LOGv("%s: Preparing a batch size of %d starting at: %d", __func__, cur_batch_size, i);
 
         // Shift context if current batch cannot fit into the context
-        if (start_pos + i + cur_batch_size >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
+        if (start_pos + i + cur_batch_size >= g_context_size - OVERFLOW_HEADROOM) {
             LOGw("%s: Current batch won't fit into context! Shifting...", __func__);
             shift_context();
         }
@@ -348,6 +352,17 @@ static int decode_tokens_in_batches(
         }
     }
     return 0;
+}
+
+extern "C"
+JNIEXPORT void JNICALL
+Java_org_levimc_zaphre_ai_LocalLlama_abortGeneration(JNIEnv *, jobject) {
+    g_abort.store(true, std::memory_order_relaxed);
+}
+extern "C"
+JNIEXPORT void JNICALL
+Java_org_levimc_zaphre_ai_LocalLlama_clearAbort(JNIEnv *, jobject) {
+    g_abort.store(false, std::memory_order_relaxed);
 }
 
 extern "C"
@@ -378,7 +393,7 @@ Java_org_levimc_zaphre_ai_LocalLlama_processSystemPrompt(
                                                has_chat_template, has_chat_template);
 
     // Handle context overflow
-    const int max_batch_size = DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM;
+    const int max_batch_size = g_context_size - OVERFLOW_HEADROOM;
     if ((int) system_tokens.size() > max_batch_size) {
         LOGe("%s: System prompt too long for context! %d tokens, max: %d",
              __func__, (int) system_tokens.size(), max_batch_size);
@@ -424,15 +439,14 @@ Java_org_levimc_zaphre_ai_LocalLlama_processUserPrompt(
 
     // Ensure user prompt doesn't exceed the context size by truncating if necessary.
     const int user_prompt_size = (int) user_tokens.size();
-    const int max_batch_size = DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM;
+    const int max_batch_size = g_context_size - OVERFLOW_HEADROOM;
     if (user_prompt_size > max_batch_size) {
-        const int skipped_tokens = user_prompt_size - max_batch_size;
-        user_tokens.resize(max_batch_size);
-        LOGw("%s: User prompt too long! Skipped %d tokens!", __func__, skipped_tokens);
+        LOGw("%s: User prompt too long for the configured context", __func__);
+        return 1;
     }
 
     // Keep room for output; do not silently shift or truncate tool evidence.
-    if (current_position + (int) user_tokens.size() + n_predict >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
+    if (current_position + (int) user_tokens.size() + n_predict >= g_context_size - OVERFLOW_HEADROOM) {
         return 1;
     }
     // Decode user tokens in batches
@@ -488,7 +502,7 @@ Java_org_levimc_zaphre_ai_LocalLlama_generateNextToken(
         jobject /*unused*/
 ) {
     // Infinite text generation via context shifting
-    if (current_position >= DEFAULT_CONTEXT_SIZE - OVERFLOW_HEADROOM) {
+    if (current_position >= g_context_size - OVERFLOW_HEADROOM) {
         LOGw("%s: Context full! Shifting...", __func__);
         shift_context();
     }

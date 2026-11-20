@@ -65,7 +65,8 @@ object AiApiClient {
         settings: ActiveAiSettings,
         systemPrompt: String,
         history: List<AgentTurnItem>,
-        tools: List<ToolSchema>
+        tools: List<ToolSchema>,
+        onPartial: ((String) -> Unit)? = null
     ): ModelResponse = withContext(Dispatchers.IO) {
         if (!settings.preset.isLocal && settings.providerId != "custom_openai" && settings.apiKey.isBlank()) {
             throw IOException("API key is empty for ${settings.preset.name}. Open the AI tab and paste your API key.")
@@ -96,7 +97,7 @@ object AiApiClient {
                 }
                 append("Assistant:")
             }
-            ModelResponse(LocalLlama.generate(localSystem, localHistory), emptyList())
+            ModelResponse(LocalLlama.generate(localSystem, localHistory, onPartial), emptyList())
         } else when (settings.protocol) {
             ApiProtocol.GEMINI_NATIVE -> callGemini(settings, effectiveSystem, history, nativeTools, job)
             ApiProtocol.ANTHROPIC_NATIVE -> callAnthropic(settings, effectiveSystem, history, nativeTools, job)

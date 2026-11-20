@@ -23,6 +23,7 @@ import org.levimc.zaphre.ai.ChatHistoryStore
 import org.levimc.zaphre.ai.ChatRole
 import org.levimc.zaphre.ai.ChatSession
 import org.levimc.zaphre.ai.ChatUiMessage
+import org.levimc.zaphre.ai.LocalLlama
 import org.levimc.zaphre.ai.ReAgentEngine
 import org.levimc.zaphre.ai.ToolStepRecord
 import org.levimc.zaphre.files.FileSlice
@@ -40,6 +41,7 @@ enum class MainTab(val label: String) {
     BG_RUN("BG Run"),
     FILES("Files"),
     CMD("CMD"),
+    MODELS("Models"),
     AI("AI")
 }
 
@@ -202,6 +204,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _termEngine.value = ShellExecutor.getPreferredEngine(appCtx)
                     _termuxOnline.value = ShellExecutor.pingTermuxBridge(appCtx)
                 }
+                MainTab.MODELS -> { LocalLlama.restoreOptions(appCtx); LocalLlama.refresh(appCtx) }
                 MainTab.AI -> _aiSettings.value = AiSettingsStore.load(appCtx)
                 MainTab.CHAT -> refreshTargetsAndMods()
             }
@@ -316,7 +319,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val partial = _liveDraft.value
                 val stopMsg = ChatUiMessage(
                     role = ChatRole.ASSISTANT,
-                    text = (partial?.text.orEmpty() + "\n\n*(Stopped by user — BG MC halted.)*").trim(),
+                    text = (partial?.text.orEmpty() + "\n\n*(Stopped by user. Background MC stop requested.)*").trim(),
                     toolSteps = partial?.toolSteps.orEmpty().map { it.copy(running = false) }
                 )
                 val completed = withUser.copy(
@@ -334,6 +337,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun stopAgentLoop() {
         agentJob?.cancel()
+        LocalLlama.cancelInference()
         viewModelScope.launch(Dispatchers.IO) {
             BgController.stopNow(appCtx)
         }
@@ -679,6 +683,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun getTermuxSetupScript(): String = ShellExecutor.generateTermuxBridgeCommand(appCtx)
 
     // ---- AI Settings actions ----
+
+    fun loadLocalModel(name: String) {
+        if (_agentBusy.value) { notify("Stop the current chat before switching models"); return }
+        viewModelScope.launch {
+            try {
+                LocalLlama.select(appCtx, name)
+                switchAiProvider("local_builtin")
+                quickPickModel(name)
+            } catch (e: kotlinx.coroutines.CancellationException) { throw e }
+            catch (e: LinkageError) { LocalLlama.status.value = "Local runtime unavailable on this device: ${e.message}" }
+            catch (e: Exception) { LocalLlama.status.value = "Load failed: ${e.message}" }
+        }
+    }
 
     fun switchAiProvider(providerId: String) {
         _fetchedModels.value = emptyList()

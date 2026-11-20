@@ -12,6 +12,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Memory
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.Psychology
 import androidx.compose.material.icons.outlined.Terminal
 import androidx.compose.material3.Badge
@@ -89,6 +90,7 @@ fun ZaphReRoot(
                         MainTab.FILES -> Icons.Outlined.Folder
                         MainTab.CMD -> Icons.Outlined.Terminal
                         MainTab.AI -> Icons.Outlined.Psychology
+                        MainTab.MODELS -> Icons.Outlined.Download
                     }
                     NavigationBarItem(
                         selected = selected,
@@ -142,6 +144,7 @@ fun ZaphReRoot(
 
                 MainTab.CMD -> TerminalScreen(vm = vm)
 
+                MainTab.MODELS -> LocalModelsScreen(vm = vm)
                 MainTab.AI -> AiSettingsScreen(vm = vm)
             }
         }

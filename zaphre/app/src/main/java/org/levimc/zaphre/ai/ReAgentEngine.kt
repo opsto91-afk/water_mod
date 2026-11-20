@@ -66,7 +66,8 @@ object ReAgentEngine {
                     settings = settings,
                     systemPrompt = sysPrompt,
                     history = history,
-                    tools = tools
+                    tools = tools,
+                    onPartial = { partial -> listener.onAssistantDraft(partial, recordedSteps.toList(), step) }
                 )
 
                 history.add(
