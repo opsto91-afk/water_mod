@@ -23,7 +23,8 @@
 #endif
 
 static inline int ai_should_log(int prio) {
-    return __android_log_is_loggable(prio, LOG_TAG, LOG_MIN_LEVEL);
+    // __android_log_is_loggable requires API 30; ZaphRE supports API 28.
+    return prio >= ANDROID_LOG_WARN;
 }
 
 #if LOG_MIN_LEVEL <= ANDROID_LOG_VERBOSE
