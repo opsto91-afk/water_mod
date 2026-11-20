@@ -73,12 +73,26 @@ jobs:
       - name: Build Signed Installable ZaphRE APK (arm64-v8a)
         working-directory: zaphre
         run: |
-          gradle :app:assembleRelease :app:assembleDebug --no-daemon --stacktrace
+          set -o pipefail
+          gradle :app:assembleRelease :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee "$RUNNER_TEMP/zaphre-build.log"
           mkdir -p dist
           cp app/build/outputs/apk/release/app-release.apk dist/ZaphRE-v2.0.0-arm64.apk
           echo "=== Verified native libraries inside ZaphRE-v2.0.0-arm64.apk ==="
           unzip -l dist/ZaphRE-v2.0.0-arm64.apk "lib/arm64-v8a/*"
           ls -lh dist/ZaphRE-v2.0.0-arm64.apk
+
+      - name: Report build failure details
+        if: failure()
+        run: |
+          python3 - <<'PY'
+          import os
+          path = os.path.join(os.environ['RUNNER_TEMP'], 'zaphre-build.log')
+          if os.path.exists(path):
+              lines = open(path, errors='replace').readlines()
+              selected = [line for i,line in enumerate(lines) if any(x in line.lower() for x in ['error:', 'what went wrong', 'failed:', 'fatal error', 'cmake error', 'could not', 'failure:'])]
+              text = ''.join(selected[-30:]) or ''.join(lines[-80:])
+              print('::error::' + text[-8000:].replace('%','%25').replace('\r','%0D').replace('\n','%0A'))
+          PY
 
       - name: Upload ZaphRE APK Artifact
         uses: actions/upload-artifact@v4
