@@ -10,11 +10,11 @@ android {
     ndkVersion = "27.2.12479018"
 
     defaultConfig {
-        applicationId = "org.levimc.zaphre"
+        applicationId = "org.levimc.zaphr2"
         minSdk = 28
         targetSdk = 35
-        versionCode = 3
-        versionName = "2.1.0"
+        versionCode = 4
+        versionName = "2.1.1"
 
         ndk {
             abiFilters += "arm64-v8a"
