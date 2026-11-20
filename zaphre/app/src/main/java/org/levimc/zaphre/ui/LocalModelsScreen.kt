@@ -81,6 +81,11 @@ fun LocalModelsScreen(vm: MainViewModel) {
         }
         item {
             Text("Recommended downloads", color = ZaphText, fontWeight = FontWeight.Bold)
+            Text(status, color = ZaphSubtext, fontSize = 12.sp)
+            if (transferring) {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                TextButton(onClick = { LocalLlama.cancelTransfer() }) { Text("Cancel transfer") }
+            }
             OutlinedTextField(value = query, onValueChange = { query = it }, label = { Text("Search model list") }, singleLine = true, modifier = Modifier.fillMaxWidth())
         }
         items(LocalLlama.catalogue.filter { it.name.contains(query, ignoreCase = true) }, key = { it.url }) { model ->

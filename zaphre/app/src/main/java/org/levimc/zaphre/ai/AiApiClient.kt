@@ -83,7 +83,7 @@ object AiApiClient {
         val nativeTools = if (usePromptXml) emptyList() else tools
 
         val resp = if (settings.providerId == "local_builtin") {
-            val localSystem = systemPrompt + if (tools.isNotEmpty()) "\n\n" + buildXmlToolInstructions(tools) else ""
+            val localSystem = systemPrompt + if (tools.isNotEmpty()) "\n\n" + buildCompactLocalToolInstructions(tools) else ""
             val localHistory = buildString {
                 history.takeLast(8).forEach { turn ->
                     when (turn) {
@@ -585,6 +585,27 @@ object AiApiClient {
             }
             return ModelResponse(textSb.toString().trim(), calls)
         }
+    }
+
+    // Keep the complete argument names and types, but not the verbose online tool manual.
+    // Every token here consumes the local model's limited context on every agent step.
+    private fun buildCompactLocalToolInstructions(tools: List<ToolSchema>): String = buildString {
+        appendLine("Call a tool using <tool_call>{\"name\":\"tool_name\",\"arguments\":{...}}</tool_call>. Wait for the tool result. Tools (argument:type; required marked *):")
+        for (tool in tools) {
+            val props = tool.parametersJson.optJSONObject("properties") ?: JSONObject()
+            val required = tool.parametersJson.optJSONArray("required")
+            val names = props.keys().asSequence().toList()
+            append(tool.name).append('(')
+            append(names.joinToString(", ") { name ->
+                val prop = props.optJSONObject(name)
+                val type = prop?.optString("type", "value") ?: "value"
+                val itemType = if (type == "array") "<" + (prop?.optJSONObject("items")?.optString("type", "value") ?: "value") + ">" else ""
+                val mandatory = required != null && (0 until required.length()).any { required.optString(it) == name }
+                name + if (mandatory) "*:" + type + itemType else ":" + type + itemType
+            })
+            appendLine(")")
+        }
+        appendLine("Use get_env_status before RE. Do not invent results. For ordinary chat answer directly.")
     }
 
     private fun buildXmlToolInstructions(tools: List<ToolSchema>): String = buildString {

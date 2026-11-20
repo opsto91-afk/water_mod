@@ -30,3 +30,6 @@ The Models tab includes a small curated coding/reasoning catalogue, a direct HTT
 
 ### Side-by-side package
 Version 2.1.1 uses the separate Android package `org.levimc.zaphr2` and a separate 61-byte Zaphkiel workspace path. It can be installed without uninstalling an earlier `org.levimc.zaphre` build. App-private chats, model files, settings and imports are not migrated automatically. GitHub Actions uses a debug signing key on an ephemeral runner, so later builds may not be able to update an installed APK; back up important data before uninstalling anything.
+
+### Offline troubleshooting (development changes)
+The built-in model gets compact tool schemas to reduce its system-prompt context cost; actual available space depends on the model tokenizer, configured context, custom instructions and output budget. Native system-prefill failures and context overflow are reported separately. Load or reload a model after changing context. Model download status and cancellation are also displayed near the catalogue. Downloads need internet, enough free app storage and a direct public GGUF URL; offline inference itself does not require an API key. These changes require testing on a device and do not guarantee all models or tool calls will work.

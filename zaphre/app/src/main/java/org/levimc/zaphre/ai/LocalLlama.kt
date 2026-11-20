@@ -176,9 +176,17 @@ object LocalLlama {
         currentCoroutineContext().ensureActive()
         clearAbort()
         currentCoroutineContext().ensureActive()
-        if (processSystemPrompt(system) != 0) throw IOException("System prompt exceeds local model context")
+        when (processSystemPrompt(system)) {
+            0 -> Unit
+            1 -> throw IOException("System instructions and tool definitions exceed the loaded model context. Increase context in Models and reload, or shorten custom instructions.")
+            else -> { currentCoroutineContext().ensureActive(); throw IOException("Local model failed while processing system instructions. Try reloading the model or reducing context to save RAM.") }
+        }
         currentCoroutineContext().ensureActive()
-        if (processUserPrompt(user, options.value.maxTokens) != 0) throw IOException("Prompt too long or local inference failed")
+        when (processUserPrompt(user, options.value.maxTokens)) {
+            0 -> Unit
+            1 -> throw IOException("Chat and tool results do not fit in the loaded context. Start a new chat, reduce output tokens, or increase context and reload.")
+            else -> { currentCoroutineContext().ensureActive(); throw IOException("Local model failed while processing the chat. Try reloading the model or reducing context to save RAM.") }
+        }
         val result = StringBuilder()
         var lastUpdate = 0L
         while (true) {

@@ -144,7 +144,8 @@ object ReAgentEngine {
             return ChatUiMessage(
                 role = ChatRole.ASSISTANT,
                 text = "**Agent Error:** ${t.message ?: t.javaClass.simpleName}\n\n" +
-                    "Tip: Check your API key / model / local server URL in the **AI** tab.",
+                    (if (settings.providerId == "local_builtin") "Tip: Check the model and CPU settings in **Models**. Built-in offline inference does not use an API key."
+                    else "Tip: Check the provider and model settings in the **AI** tab."),
                 toolSteps = recordedSteps.toList(),
                 modelTag = modelBadge
             )
