@@ -31,6 +31,11 @@ data class AiProviderPreset(
 
 val BUILTIN_PROVIDERS: List<AiProviderPreset> = listOf(
     AiProviderPreset(
+        id = "local_builtin", name = "Local AI — Built-in GGUF", badge = "On-device",
+        protocol = ApiProtocol.OPENAI_COMPAT, baseUrl = "", defaultModel = "local-model",
+        suggestedModels = emptyList(), isLocal = true, keyHint = "Not required for built-in models"
+    ),
+    AiProviderPreset(
         id = "gemini",
         name = "Google Gemini (AI Studio)",
         badge = "Online",

@@ -20,3 +20,6 @@ A strictly **Portrait (9:16)** ChatGPT-style Android RE workstation (Ghidra-MCP 
 4. *(Optional)* Open **CMD → Termux Setup** and paste the 1-line bridge command in Termux if you want the AI to also run `python3`, `rg`, `llvm-objdump`, and `readelf`.
 5. Go to **Chat** and ask ZaphRE anything — e.g.:
    > *"LiquidBlock ka tick function nikal, pseudo-C samjha, aur cross-version UNIQUE signature generate kar ke BG MC band kar de."*
+
+### Experimental built-in local inference (v2)
+The AI tab contains a CPU-only GGUF runtime based on the pinned upstream llama.cpp Android example (MIT license; see `LLAMA_CPP_LICENSE`). Download a listed GGUF or import one from Android's document picker, then tap Load. Inference runs inside the app; no Termux, external server, or API key is needed. Models consume substantial storage and RAM and are not bundled in the APK. Local RE tool calls use a text-based tool-call format: model support varies and results must be checked. Model load and background Minecraft together may exceed available memory. Stop cancels the active network request and stops local generation between generated tokens; a native prefill operation or other blocking tool may take longer to stop. Device compatibility and performance need testing.

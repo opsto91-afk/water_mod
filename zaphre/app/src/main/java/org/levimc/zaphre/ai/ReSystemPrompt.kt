@@ -2,6 +2,22 @@ package org.levimc.zaphre.ai
 
 object ReSystemPrompt {
 
+    // Smaller local models should not need to process the full RE manual on every request.
+    // Tool schemas remain available to the model; never claim that a result was verified
+    // unless a tool actually returned evidence.
+    fun buildLocal(workspacePath: String, extraInstructions: String): String = buildString {
+        append("You are ZaphRE, an Android Minecraft Bedrock reverse-engineering assistant. ")
+        append("Reply in the user's language. For ordinary chat, answer directly. ")
+        append("For RE tasks, use available tools to inspect the environment and evidence; ")
+        append("never invent addresses, signatures, tool results, or verification. ")
+        append("If a tool fails or cannot do the task, say so. Workspace: ")
+        append(workspacePath)
+        if (extraInstructions.isNotBlank()) {
+            append("\nUser instructions: ")
+            append(extraInstructions.trim())
+        }
+    }
+
     fun build(workspacePath: String, extraInstructions: String): String = buildString {
         append(
             """

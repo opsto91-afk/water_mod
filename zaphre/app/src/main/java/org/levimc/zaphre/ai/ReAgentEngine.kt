@@ -24,7 +24,11 @@ object ReAgentEngine {
         val appCtx = context.applicationContext
         val settings = AiSettingsStore.load(appCtx)
         val wsPath = ZaphkielConfig.getWorkspacePathSlash(appCtx)
-        val sysPrompt = ReSystemPrompt.build(wsPath, settings.customPrompt)
+        val sysPrompt = if (settings.preset.isLocal) {
+            ReSystemPrompt.buildLocal(wsPath, settings.customPrompt)
+        } else {
+            ReSystemPrompt.build(wsPath, settings.customPrompt)
+        }
         val tools = ReTools.schemas()
 
         // Rebuild conversation history cleanly (keep last 18 messages to preserve context budget)

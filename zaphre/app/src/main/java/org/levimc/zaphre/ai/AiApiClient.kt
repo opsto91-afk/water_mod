@@ -1,11 +1,16 @@
 package org.levimc.zaphre.ai
 
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.InternalCoroutinesApi
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.IOException
@@ -66,6 +71,7 @@ object AiApiClient {
             throw IOException("API key is empty for ${settings.preset.name}. Open the AI tab and paste your API key.")
         }
 
+        val job = currentCoroutineContext()[Job]
         val usePromptXml = settings.toolCallMode == ToolCallMode.PROMPT_XML
         val effectiveSystem = if (usePromptXml && tools.isNotEmpty()) {
             systemPrompt + "\n\n" + buildXmlToolInstructions(tools)
@@ -75,20 +81,37 @@ object AiApiClient {
 
         val nativeTools = if (usePromptXml) emptyList() else tools
 
-        val resp = when (settings.protocol) {
-            ApiProtocol.GEMINI_NATIVE -> callGemini(settings, effectiveSystem, history, nativeTools)
-            ApiProtocol.ANTHROPIC_NATIVE -> callAnthropic(settings, effectiveSystem, history, nativeTools)
+        val resp = if (settings.providerId == "local_builtin") {
+            val localSystem = systemPrompt + if (tools.isNotEmpty()) "\n\n" + buildXmlToolInstructions(tools) else ""
+            val localHistory = buildString {
+                history.takeLast(8).forEach { turn ->
+                    when (turn) {
+                        is AgentTurnItem.User -> appendLine("User: ${turn.text.take(4000)}")
+                        is AgentTurnItem.Assistant -> {
+                            if (turn.text.isNotBlank()) appendLine("Assistant: ${turn.text.take(2000)}")
+                            turn.toolCalls.forEach { appendLine("<tool_call>${JSONObject().put("name", it.name).put("arguments", it.args)}</tool_call>") }
+                        }
+                        is AgentTurnItem.ToolResult -> appendLine("<tool_result name=\"${turn.toolName}\">${turn.output.take(4000)}</tool_result>")
+                    }
+                }
+                append("Assistant:")
+            }
+            ModelResponse(LocalLlama.generate(localSystem, localHistory), emptyList())
+        } else when (settings.protocol) {
+            ApiProtocol.GEMINI_NATIVE -> callGemini(settings, effectiveSystem, history, nativeTools, job)
+            ApiProtocol.ANTHROPIC_NATIVE -> callAnthropic(settings, effectiveSystem, history, nativeTools, job)
             ApiProtocol.OPENAI_COMPAT -> {
                 try {
-                    callOpenAiCompat(settings, effectiveSystem, history, nativeTools)
+                    callOpenAiCompat(settings, effectiveSystem, history, nativeTools, job)
                 } catch (e: IOException) {
+                    currentCoroutineContext().ensureActive()
                     // Auto-fallback to XML prompt tool mode if a local/reasoning model rejects `tools`
                     val msg = e.message.orEmpty().lowercase()
                     if (nativeTools.isNotEmpty() &&
                         ("tool" in msg || "function" in msg || "400" in msg || "not support" in msg)
                     ) {
                         val fallbackSys = systemPrompt + "\n\n" + buildXmlToolInstructions(tools)
-                        callOpenAiCompat(settings, fallbackSys, history, emptyList())
+                        callOpenAiCompat(settings, fallbackSys, history, emptyList(), job)
                     } else {
                         throw e
                     }
@@ -164,11 +187,32 @@ object AiApiClient {
         }
     }
 
+    // Cancelling the agent must interrupt the in-flight socket, not merely the coroutine
+    // waiting on OkHttp's blocking execute/body read. The callback is scoped to this call.
+    @OptIn(InternalCoroutinesApi::class)
+    private inline fun <T> executeChatRequest(request: Request, job: Job?, block: (Response) -> T): T {
+        val call = httpClient.newCall(request)
+        val handle = job?.invokeOnCompletion(onCancelling = true, invokeImmediately = true) { cause ->
+            if (cause != null) call.cancel()
+        }
+        try {
+            job?.ensureActive()
+            return call.execute().use(block)
+        } catch (e: IOException) {
+            // Socket cancellation surfaces as IOException; preserve coroutine cancellation.
+            job?.ensureActive()
+            throw e
+        } finally {
+            handle?.dispose()
+        }
+    }
+
     private fun callGemini(
         settings: ActiveAiSettings,
         systemPrompt: String,
         history: List<AgentTurnItem>,
-        tools: List<ToolSchema>
+        tools: List<ToolSchema>,
+        job: Job?
     ): ModelResponse {
         val contents = JSONArray()
         var i = 0
@@ -258,7 +302,7 @@ object AiApiClient {
             .post(payload.toString().toRequestBody(JSON_MEDIA))
             .build()
 
-        httpClient.newCall(req).execute().use { resp ->
+        executeChatRequest(req, job) { resp ->
             val raw = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
                 throw IOException("Gemini API ${resp.code}: ${extractApiError(raw)}")
@@ -304,7 +348,8 @@ object AiApiClient {
         settings: ActiveAiSettings,
         systemPrompt: String,
         history: List<AgentTurnItem>,
-        tools: List<ToolSchema>
+        tools: List<ToolSchema>,
+        job: Job?
     ): ModelResponse {
         val messages = JSONArray()
         messages.put(JSONObject().put("role", "system").put("content", systemPrompt))
@@ -399,7 +444,7 @@ object AiApiClient {
             rb.header("X-Title", "ZaphRE")
         }
 
-        httpClient.newCall(rb.build()).execute().use { resp ->
+        executeChatRequest(rb.build(), job) { resp ->
             val raw = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
                 throw IOException("${settings.preset.name} HTTP ${resp.code}: ${extractApiError(raw)}")
@@ -436,7 +481,8 @@ object AiApiClient {
         settings: ActiveAiSettings,
         systemPrompt: String,
         history: List<AgentTurnItem>,
-        tools: List<ToolSchema>
+        tools: List<ToolSchema>,
+        job: Job?
     ): ModelResponse {
         val messages = JSONArray()
         var i = 0
@@ -506,7 +552,7 @@ object AiApiClient {
             .post(payload.toString().toRequestBody(JSON_MEDIA))
             .build()
 
-        httpClient.newCall(req).execute().use { resp ->
+        executeChatRequest(req, job) { resp ->
             val raw = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
                 throw IOException("Claude HTTP ${resp.code}: ${extractApiError(raw)}")

@@ -44,6 +44,16 @@ class MinecraftVersionTest {
     }
 
     @Test
+    fun `local prompt is compact and preserves instructions`() {
+        val local = org.levimc.zaphre.ai.ReSystemPrompt.buildLocal("/workspace/", "Reply in Hindi")
+        val full = org.levimc.zaphre.ai.ReSystemPrompt.build("/workspace/", "Reply in Hindi")
+        assertTrue(local.length < full.length / 2)
+        assertTrue(local.contains("/workspace/"))
+        assertTrue(local.contains("Reply in Hindi"))
+        assertTrue(local.contains("never invent"))
+    }
+
+    @Test
     fun `tool schemas and AI providers are valid`() {
         val schemas = ReTools.schemas()
         assertTrue(schemas.size >= 10)

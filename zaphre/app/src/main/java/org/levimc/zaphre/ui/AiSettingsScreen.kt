@@ -1,5 +1,11 @@
 package org.levimc.zaphre.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.launch
+import org.levimc.zaphre.ai.LocalLlama
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -75,6 +81,14 @@ fun AiSettingsScreen(vm: MainViewModel) {
     val fetchedModels by vm.fetchedModels.collectAsState()
     val testStatus by vm.aiTestStatus.collectAsState()
     val clipboard = LocalClipboardManager.current
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val localModels by LocalLlama.models.collectAsState()
+    val localStatus by LocalLlama.status.collectAsState()
+    val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) scope.launch { runCatching { LocalLlama.importModel(context, uri) }.onFailure { LocalLlama.status.value = "Import failed: ${it.message}" } }
+    }
+    LaunchedEffect(Unit) { LocalLlama.refresh(context) }
 
     var baseUrl by remember { mutableStateOf(saved.baseUrl) }
     var apiKey by remember { mutableStateOf(saved.apiKey) }
@@ -177,8 +191,26 @@ fun AiSettingsScreen(vm: MainViewModel) {
             }
         }
 
+        if (saved.providerId == "local_builtin") {
+            item {
+                Surface(shape = RoundedCornerShape(14.dp), color = ZaphSurface, border = BorderStroke(1.dp, ZaphBorder), modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text("On-device GGUF models · CPU", color = ZaphText, fontWeight = FontWeight.Bold)
+                        Text("Download or import a model, then Load. Model files stay on this device; RAM and storage required.", color = ZaphSubtext, fontSize = 12.sp)
+                        Text(localStatus, color = ZaphAccent, fontSize = 12.sp)
+                        OutlinedButton(onClick = { importLauncher.launch(arrayOf("*/*")) }) { Text("Import GGUF from device") }
+                        LocalLlama.catalogue.forEach { item ->
+                            OutlinedButton(onClick = { scope.launch { runCatching { LocalLlama.download(context, item) }.onFailure { LocalLlama.status.value = "Download failed: ${it.message}" } } }) { Text("Download ${item.name}", fontSize = 12.sp) }
+                        }
+                        localModels.forEach { name ->
+                            OutlinedButton(onClick = { scope.launch { runCatching { LocalLlama.select(context, name) }.onFailure { LocalLlama.status.value = "Load failed: ${it.message}" } } }) { Text("Load $name", fontSize = 12.sp) }
+                        }
+                    }
+                }
+            }
+        }
         // Active Provider Credentials & Model Card
-        item {
+        if (saved.providerId != "local_builtin") item {
             Surface(
                 shape = RoundedCornerShape(14.dp),
                 color = ZaphSurface,
