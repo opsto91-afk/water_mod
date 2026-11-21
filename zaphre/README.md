@@ -52,3 +52,5 @@ Chat's attachment picker currently supports one UTF-8 text/code/JSON file up to 
 Workspace list supports rename and asks before delete. The text editor now loads the complete UTF-8 file (up to 256 KiB) instead of editing the paginated/clipped viewer output; save refuses to overwrite if the file changed since opening. Folder-selected backups are not part of this workspace browser. AI file operations still use their existing workspace tools; approval prompts for AI writes are not yet implemented.
 
 Ask-before-switch mode prompts in Chat before using an additional key after a rate limit; declining stops the retry. Automatic mode does not prompt. This applies only to an active request, not to process-death recovery or background job scheduling.
+
+The AI can list and read bounded UTF-8 files in the selected backup folder, and can request permission to create a new text file or directory there. The parent directory must exist; overwriting and deleting selected-folder files are not supported by these tools. Approval applies to these selected-folder creation tools only; shell and other existing tools have their own capabilities and are not covered by this prompt.

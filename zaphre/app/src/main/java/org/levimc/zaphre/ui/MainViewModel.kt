@@ -91,6 +91,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         finally { _keySwitchRequest.value = null; keySwitchDecision = null }
     }
 
+    data class CreateRequest(val path: String, val directory: Boolean, val content: String)
+    private val _createRequest = MutableStateFlow<CreateRequest?>(null)
+    val createRequest: StateFlow<CreateRequest?> = _createRequest.asStateFlow()
+    private var createDecision: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
+    fun decideCreate(approve: Boolean) { createDecision?.complete(approve) }
+    private suspend fun askCreate(path: String, directory: Boolean, content: String): Boolean {
+        val decision = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        createDecision = decision
+        _createRequest.value = CreateRequest(path, directory, content)
+        try { return decision.await() } finally { _createRequest.value = null; createDecision = null }
+    }
+
     // BG Runner & Zaphkiel state
     private val _bgSnapshot = MutableStateFlow(BgRunnerSnapshot())
     val bgSnapshot: StateFlow<BgRunnerSnapshot> = _bgSnapshot.asStateFlow()
@@ -311,6 +323,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     priorMessages = prior,
                     userPrompt = prompt,
                     listener = object : ReAgentEngine.StepListener {
+                        override suspend fun confirmSelectedCreate(path: String, directory: Boolean, content: String): Boolean = askCreate(path, directory, content)
                         override suspend fun confirmKeySwitch(keyNumber: Int): Boolean = askToSwitchKey(keyNumber)
                         override fun onAssistantDraft(text: String, steps: List<ToolStepRecord>, stepIndex: Int) {
                             _liveDraft.value = ChatUiMessage(

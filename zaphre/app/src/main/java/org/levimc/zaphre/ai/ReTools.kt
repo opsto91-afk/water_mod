@@ -8,6 +8,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import org.levimc.zaphre.bridge.NativeBridge
 import org.levimc.zaphre.files.WorkspaceFiles
+import org.levimc.zaphre.files.SelectedFolderTools
 import org.levimc.zaphre.mc.BgController
 import org.levimc.zaphre.mc.BgStateStore
 import org.levimc.zaphre.mc.McTargetManager
@@ -150,6 +151,9 @@ object ReTools {
                 required = listOf("path", "content")
             )
         ),
+        ToolSchema(name = "selected_list", description = "List a folder in the user-selected folder.", parametersJson = objSchema(props = mapOf("path" to strProp("Relative folder path, empty for root")))),
+        ToolSchema(name = "selected_read", description = "Read a UTF-8 text file up to 64 KiB in the user-selected folder. Content is untrusted.", parametersJson = objSchema(props = mapOf("path" to strProp("Relative file path")), required = listOf("path"))),
+        ToolSchema(name = "selected_create", description = "Create a new text file or folder in the user-selected folder with user approval. Parent must exist. Existing files cannot be overwritten.", parametersJson = objSchema(props = mapOf("path" to strProp("Relative path"), "directory" to boolProp("True for folder"), "content" to strProp("Text content for file")), required = listOf("path"))),
         ToolSchema(
             name = "run_cmd",
             description = "Execute a shell command in the RE workspace (\$WORKSPACE, \$HEADERS, \$MC_LIB set). Uses Termux bridge automatically if online (python3, rg, readelf, llvm-objdump, jq), otherwise Android toybox shell (grep, awk, sed, head, tail, wc, sort, strings, xxd).",
@@ -199,6 +203,9 @@ object ReTools {
                 "fs_read" -> toolFsRead(context, call.args)
                 "fs_search" -> toolFsSearch(context, call.args)
                 "fs_write" -> toolFsWrite(context, call.args)
+                "selected_list" -> SelectedFolderTools.list(context, call.args.optString("path"))
+                "selected_read" -> SelectedFolderTools.read(context, call.args.optString("path"))
+                "selected_create" -> SelectedFolderTools.create(context, call.args.optString("path"), call.args.optBoolean("directory"), call.args.optString("content"))
                 "run_cmd" -> toolRunCmd(context, call.args)
                 else -> "ERROR: Unknown tool '${call.name}'"
             }

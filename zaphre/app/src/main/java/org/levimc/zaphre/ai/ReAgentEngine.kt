@@ -13,6 +13,7 @@ object ReAgentEngine {
 
     interface StepListener {
         fun onAssistantDraft(text: String, steps: List<ToolStepRecord>, stepIndex: Int)
+        suspend fun confirmSelectedCreate(path: String, directory: Boolean, content: String): Boolean = false
         suspend fun confirmKeySwitch(keyNumber: Int): Boolean = false
     }
 
@@ -109,7 +110,9 @@ object ReAgentEngine {
                     listener.onAssistantDraft(accumulatedText, recordedSteps.toList(), step)
 
                     val t0 = System.currentTimeMillis()
-                    val out = ReTools.execute(appCtx, tc)
+                    val out = if (tc.name == "selected_create" && !listener.confirmSelectedCreate(
+                            tc.args.optString("path"), tc.args.optBoolean("directory"), tc.args.optString("content")
+                        )) "ERROR: User declined creation in selected folder." else ReTools.execute(appCtx, tc)
                     val dt = System.currentTimeMillis() - t0
                     val isErr = out.startsWith("ERROR")
 

@@ -132,12 +132,22 @@ fun ChatScreen(
     val currentSession by vm.currentSession.collectAsState()
     val agentBusy by vm.agentBusy.collectAsState()
     val keySwitchRequest by vm.keySwitchRequest.collectAsState()
+    val createRequest by vm.createRequest.collectAsState()
     val liveDraft by vm.liveDraft.collectAsState()
     val bgSnapshot by vm.bgSnapshot.collectAsState()
     val aiSettings by vm.aiSettings.collectAsState()
     val selectedTarget by vm.selectedTarget.collectAsState()
     val mods by vm.installedMods.collectAsState()
 
+    createRequest?.let { request ->
+        AlertDialog(
+            onDismissRequest = { vm.decideCreate(false) },
+            title = { Text("Create in selected folder?") },
+            text = { Text("${if (request.directory) "Folder" else "File"}: ${request.path}\n" + if (request.directory) "" else "Preview (first 1000 characters):\n${request.content.take(1000)}") },
+            confirmButton = { TextButton(onClick = { vm.decideCreate(true) }) { Text("Create") } },
+            dismissButton = { TextButton(onClick = { vm.decideCreate(false) }) { Text("Deny") } }
+        )
+    }
     keySwitchRequest?.let { keyNumber ->
         AlertDialog(
             onDismissRequest = { vm.decideKeySwitch(false) },
