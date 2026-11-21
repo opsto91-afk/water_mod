@@ -78,10 +78,11 @@ object AiApiClient {
         systemPrompt: String,
         history: List<AgentTurnItem>,
         tools: List<ToolSchema>,
-        onPartial: ((String) -> Unit)? = null
+        onPartial: ((String) -> Unit)? = null,
+        confirmKeySwitch: (suspend (Int) -> Boolean)? = null
     ): ModelResponse {
         val keys = (listOf(settings.apiKey) + settings.additionalKeys).filter { it.isNotBlank() }.distinct()
-        if (!settings.autoSwitchKeys || settings.preset.isLocal || keys.size < 2) {
+        if ((!settings.autoSwitchKeys && !settings.askSwitchKeys) || settings.preset.isLocal || keys.size < 2) {
             return chatOnce(settings, systemPrompt, history, tools, onPartial)
         }
         val now = System.currentTimeMillis()
@@ -89,6 +90,10 @@ object AiApiClient {
         if (available.isEmpty()) throw IOException("All configured keys are cooling down. Please wait before retrying.")
         for (key in available) {
             currentCoroutineContext().ensureActive()
+            if (keys.indexOf(key) > 0 && settings.askSwitchKeys && !settings.autoSwitchKeys) {
+                val approved = confirmKeySwitch?.invoke(keys.indexOf(key) + 1) ?: false
+                if (!approved) throw IOException("Key switch declined or unavailable. Retry when ready.")
+            }
             try {
                 return chatOnce(settings.copy(apiKey = key), systemPrompt, history, tools, onPartial)
             } catch (e: RateLimitException) {

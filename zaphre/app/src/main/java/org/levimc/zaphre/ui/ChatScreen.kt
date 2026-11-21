@@ -41,6 +41,7 @@ import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Menu
 import androidx.compose.material.icons.filled.Stop
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.HorizontalDivider
@@ -130,11 +131,22 @@ fun ChatScreen(
     val sessions by vm.sessions.collectAsState()
     val currentSession by vm.currentSession.collectAsState()
     val agentBusy by vm.agentBusy.collectAsState()
+    val keySwitchRequest by vm.keySwitchRequest.collectAsState()
     val liveDraft by vm.liveDraft.collectAsState()
     val bgSnapshot by vm.bgSnapshot.collectAsState()
     val aiSettings by vm.aiSettings.collectAsState()
     val selectedTarget by vm.selectedTarget.collectAsState()
     val mods by vm.installedMods.collectAsState()
+
+    keySwitchRequest?.let { keyNumber ->
+        AlertDialog(
+            onDismissRequest = { vm.decideKeySwitch(false) },
+            title = { Text("Switch API key?") },
+            text = { Text("The provider returned a rate-limit response. Try key $keyNumber for the same provider and model?") },
+            confirmButton = { TextButton(onClick = { vm.decideKeySwitch(true) }) { Text("Switch") } },
+            dismissButton = { TextButton(onClick = { vm.decideKeySwitch(false) }) { Text("Don't switch") } }
+        )
+    }
 
     val hasZaphkiel = mods.any { it.isZaphkiel }
     val localLoaded by org.levimc.zaphre.ai.LocalLlama.loaded.collectAsState()

@@ -188,6 +188,7 @@ data class ActiveAiSettings(
     val additionalKeys: List<String> = emptyList(),
     val additionalKeysUnavailable: Boolean = false,
     val autoSwitchKeys: Boolean = false,
+    val askSwitchKeys: Boolean = false,
     val model: String = "gemini-2.5-flash",
     val toolCallMode: ToolCallMode = ToolCallMode.NATIVE_AUTO,
     val maxAgentSteps: Int = 25,
@@ -221,6 +222,7 @@ object AiSettingsStore {
             additionalKeys = keyLoad.getOrDefault(emptyList()),
             additionalKeysUnavailable = keyLoad.isFailure,
             autoSwitchKeys = p.getBoolean("auto_switch_$pid", false),
+            askSwitchKeys = p.getBoolean("ask_switch_$pid", false),
             model = model.trim(),
             toolCallMode = tcMode,
             maxAgentSteps = p.getInt("max_steps", 25).coerceIn(3, 80),
@@ -239,6 +241,7 @@ object AiSettingsStore {
             .putString("url_$pid", s.baseUrl.trim().trimEnd('/'))
             .putString("key_$pid", s.apiKey.trim())
             .putBoolean("auto_switch_$pid", s.autoSwitchKeys)
+            .putBoolean("ask_switch_$pid", s.askSwitchKeys)
             .putString("model_$pid", s.model.trim())
             .putString("tool_mode_$pid", s.toolCallMode.name)
             .putInt("max_steps", s.maxAgentSteps.coerceIn(3, 80))

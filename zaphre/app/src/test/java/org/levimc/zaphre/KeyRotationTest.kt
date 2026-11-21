@@ -38,4 +38,21 @@ class KeyRotationTest {
             } catch (_: IOException) { assertEquals(1, server.requestCount) }
         } finally { server.shutdown() }
     }
+    @Test fun askModeHonorsDenial() = runBlocking {
+        val server = MockWebServer(); server.start()
+        try {
+            server.enqueue(MockResponse().setResponseCode(429).addHeader("Retry-After", "5"))
+            val settings = ActiveAiSettings(providerId = "custom_openai", protocol = ApiProtocol.OPENAI_COMPAT,
+                baseUrl = server.url("/v1").toString().trimEnd('/'), apiKey = "ask-first", additionalKeys = listOf("ask-second"),
+                askSwitchKeys = true, model = "test")
+            var requested = 0
+            try {
+                AiApiClient.chat(settings, "system", listOf(AgentTurnItem.User("hello")), emptyList(), confirmKeySwitch = { requested = it; false })
+                fail("Expected rejection")
+            } catch (_: IOException) {
+                assertEquals(2, requested)
+                assertEquals(1, server.requestCount)
+            }
+        } finally { server.shutdown() }
+    }
 }

@@ -97,6 +97,7 @@ fun AiSettingsScreen(vm: MainViewModel) {
     var extraKeys by remember { mutableStateOf(saved.additionalKeys) }
     var newKey by remember { mutableStateOf("") }
     var autoSwitchKeys by remember { mutableStateOf(saved.autoSwitchKeys) }
+    var askSwitchKeys by remember { mutableStateOf(saved.askSwitchKeys) }
     var model by remember { mutableStateOf(saved.model) }
     var toolMode by remember { mutableStateOf(saved.toolCallMode) }
     var maxSteps by remember { mutableIntStateOf(saved.maxAgentSteps) }
@@ -112,6 +113,7 @@ fun AiSettingsScreen(vm: MainViewModel) {
         extraKeys = saved.additionalKeys
         newKey = ""
         autoSwitchKeys = saved.autoSwitchKeys
+        askSwitchKeys = saved.askSwitchKeys
         model = saved.model
         toolMode = saved.toolCallMode
         maxSteps = saved.maxAgentSteps
@@ -125,6 +127,7 @@ fun AiSettingsScreen(vm: MainViewModel) {
         apiKey = apiKey.trim(),
         additionalKeys = extraKeys,
         autoSwitchKeys = autoSwitchKeys,
+        askSwitchKeys = askSwitchKeys,
         model = model.trim().ifBlank { saved.preset.defaultModel },
         toolCallMode = toolMode,
         maxAgentSteps = maxSteps,
@@ -272,7 +275,11 @@ fun AiSettingsScreen(vm: MainViewModel) {
                     }) { Text("Add key") }
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         Text("Auto switch on HTTP 429", modifier = Modifier.weight(1f), color = ZaphText)
-                        Switch(checked = autoSwitchKeys, onCheckedChange = { autoSwitchKeys = it })
+                        Switch(checked = autoSwitchKeys, onCheckedChange = { autoSwitchKeys = it; if (it) askSwitchKeys = false })
+                    }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Ask before switching keys", modifier = Modifier.weight(1f), color = ZaphText)
+                        Switch(checked = askSwitchKeys, onCheckedChange = { askSwitchKeys = it; if (it) autoSwitchKeys = false })
                     }
                     Text("Save settings to apply. Additional keys use device Keystore; the existing primary key uses the legacy settings storage. Shared provider quotas may still block all keys.", color = ZaphSubtext, fontSize = 11.sp)
 

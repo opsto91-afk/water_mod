@@ -78,6 +78,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val liveDraft: StateFlow<ChatUiMessage?> = _liveDraft.asStateFlow()
 
     private var agentJob: Job? = null
+    private val _keySwitchRequest = MutableStateFlow<Int?>(null)
+    val keySwitchRequest: StateFlow<Int?> = _keySwitchRequest.asStateFlow()
+    private var keySwitchDecision: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
+
+    fun decideKeySwitch(approve: Boolean) { keySwitchDecision?.complete(approve) }
+    private suspend fun askToSwitchKey(number: Int): Boolean {
+        val decision = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        keySwitchDecision = decision
+        _keySwitchRequest.value = number
+        try { return decision.await() }
+        finally { _keySwitchRequest.value = null; keySwitchDecision = null }
+    }
 
     // BG Runner & Zaphkiel state
     private val _bgSnapshot = MutableStateFlow(BgRunnerSnapshot())
@@ -299,6 +311,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     priorMessages = prior,
                     userPrompt = prompt,
                     listener = object : ReAgentEngine.StepListener {
+                        override suspend fun confirmKeySwitch(keyNumber: Int): Boolean = askToSwitchKey(keyNumber)
                         override fun onAssistantDraft(text: String, steps: List<ToolStepRecord>, stepIndex: Int) {
                             _liveDraft.value = ChatUiMessage(
                                 role = ChatRole.ASSISTANT,

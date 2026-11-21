@@ -13,6 +13,7 @@ object ReAgentEngine {
 
     interface StepListener {
         fun onAssistantDraft(text: String, steps: List<ToolStepRecord>, stepIndex: Int)
+        suspend fun confirmKeySwitch(keyNumber: Int): Boolean = false
     }
 
     suspend fun runTurn(
@@ -67,7 +68,8 @@ object ReAgentEngine {
                     systemPrompt = sysPrompt,
                     history = history,
                     tools = tools,
-                    onPartial = { partial -> listener.onAssistantDraft(partial, recordedSteps.toList(), step) }
+                    onPartial = { partial -> listener.onAssistantDraft(partial, recordedSteps.toList(), step) },
+                    confirmKeySwitch = { keyNumber -> listener.confirmKeySwitch(keyNumber) }
                 )
 
                 history.add(
