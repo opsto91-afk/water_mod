@@ -71,6 +71,10 @@ fun ZaphReRoot(
         if (uri != null) vm.importWorkspaceFile(uri)
     }
 
+    val backupFolderPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
+        if (uri != null) vm.chooseBackupFolder(uri)
+    }
+
     Scaffold(
         modifier = Modifier
             .fillMaxSize()
@@ -141,7 +145,8 @@ fun ZaphReRoot(
 
                 MainTab.FILES -> FilesScreen(
                     vm = vm,
-                    onPickImportFile = { wsFilePicker.launch(arrayOf("*/*")) }
+                    onPickImportFile = { wsFilePicker.launch(arrayOf("*/*")) },
+                    onPickBackupFolder = { backupFolderPicker.launch(null) }
                 )
 
                 MainTab.CMD -> TerminalScreen(vm = vm)

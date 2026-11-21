@@ -42,3 +42,8 @@ Use the download icon in Chat to export the current completed conversation to a 
 
 ### Experimental additional API keys
 Online provider settings allow additional keys and an opt-in switch on HTTP 429. Keys are associated with the current provider and URL; each available key is attempted at most once per request. Cooldowns are held in memory and use an integer Retry-After header or 60 seconds, so they do not survive process restart. This is not persistent background work and does not resume a stopped agent. Shared account/project quota may prevent switching from helping. Additional keys are encrypted with a device-local Android Keystore key; the original primary key still uses the existing private preferences storage. Keystore-encrypted keys do not automatically migrate between package IDs or devices. Exported chats can contain text the user entered, including secrets.
+
+### Optional backups and text attachments
+Files → Choose backup folder lets Android grant access to a folder. After a completed chat the app writes a new text backup there; Save finding writes a separate file there when selected, otherwise to workspace notes. Existing workspace is not relocated, and each backup is a new file. Check the destination and retain backups separately. Folder permissions can be revoked, and exports may contain private chat content. Tool outputs in saved history may have been truncated.
+
+Chat's attachment picker currently supports one UTF-8 text/code/JSON file up to 64 KiB. The text becomes part of the chat and is sent to the selected provider, so it can affect token usage. PDF, images, video, binary files, large files and attachment-specific multimodal APIs are not supported by this reader.

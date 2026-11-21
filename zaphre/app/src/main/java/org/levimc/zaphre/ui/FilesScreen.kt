@@ -85,7 +85,8 @@ private val FILE_CATEGORIES = listOf("All", "Outputs", "Pseudo-C", "Signatures",
 @Composable
 fun FilesScreen(
     vm: MainViewModel,
-    onPickImportFile: () -> Unit
+    onPickImportFile: () -> Unit,
+    onPickBackupFolder: () -> Unit
 ) {
     val openedFile by vm.openedFile.collectAsState()
     val searchOutput by vm.fileSearchOutput.collectAsState()
@@ -177,6 +178,12 @@ fun FilesScreen(
                 Icon(Icons.Default.Refresh, "Refresh", tint = ZaphSubtext, modifier = Modifier.size(20.dp))
             }
         }
+
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            TextButton(onClick = onPickBackupFolder) { Text("Choose backup folder") }
+            TextButton(onClick = { vm.clearBackupFolder() }) { Text("Clear selection") }
+        }
+        Text("Selected folder receives completed chat backups and saved findings. RE workspace remains separate.", color = ZaphSubtext, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 12.dp))
 
         // Category Filter Row
         Row(

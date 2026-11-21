@@ -28,6 +28,7 @@ import org.levimc.zaphre.ai.LocalLlama
 import org.levimc.zaphre.ai.ReAgentEngine
 import org.levimc.zaphre.ai.ToolStepRecord
 import org.levimc.zaphre.files.FileSlice
+import org.levimc.zaphre.files.BackupFolder
 import org.levimc.zaphre.files.WorkspaceEntry
 import org.levimc.zaphre.files.WorkspaceFiles
 import org.levimc.zaphre.mc.BgController
@@ -314,6 +315,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 _currentSession.value = completed
                 ChatHistoryStore.saveSession(appCtx, completed)
+                backupChat(completed)
                 _sessions.value = ChatHistoryStore.listSessions(appCtx)
                 reloadZaphkielEditors()
                 refreshFiles()
@@ -330,6 +332,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 _currentSession.value = completed
                 ChatHistoryStore.saveSession(appCtx, completed)
+                backupChat(completed)
             } finally {
                 _liveDraft.value = null
                 _agentBusy.value = false
@@ -650,10 +653,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun chooseBackupFolder(uri: Uri) {
+        runCatching { BackupFolder.choose(appCtx, uri) }
+            .onSuccess { notify("Backup folder selected") }
+            .onFailure { notify("Could not select folder: ${it.message}") }
+    }
+
+    fun clearBackupFolder() { BackupFolder.clear(appCtx); notify("Backup folder cleared; existing files were not deleted") }
+
+    private fun backupChat(session: ChatSession) {
+        if (BackupFolder.selected(appCtx) == null) return
+        runCatching { BackupFolder.writeNew(appCtx, "chat", ChatExport.format(session)) }
+            .onFailure { notify("Chat backup failed: ${it.message}") }
+    }
+
     fun saveFinding(message: ChatUiMessage, session: ChatSession) {
         viewModelScope.launch(Dispatchers.IO) {
             val path = "notes/finding-${java.util.UUID.randomUUID()}.txt"
             val content = ChatExport.format(session.copy(messages = listOf(message)))
+            if (BackupFolder.selected(appCtx) != null) {
+                runCatching { BackupFolder.writeNew(appCtx, "finding", content) }
+                    .onSuccess { notify("Saved finding in selected backup folder: $it") }
+                    .onFailure { notify("Could not save finding: ${it.message}") }
+                return@launch
+            }
             WorkspaceFiles.writeText(appCtx, path, content).fold(
                 onSuccess = { notify("Saved to Files / $path") },
                 onFailure = { notify("Could not save finding: ${it.message}") }

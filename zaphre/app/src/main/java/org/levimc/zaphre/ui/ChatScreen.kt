@@ -31,6 +31,7 @@ import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
@@ -67,6 +68,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -74,6 +76,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import org.levimc.zaphre.ai.TextAttachment
 import org.levimc.zaphre.ai.ChatRole
 import org.levimc.zaphre.ai.ChatUiMessage
 import org.levimc.zaphre.ai.ToolStepRecord
@@ -136,6 +141,17 @@ fun ChatScreen(
     val hasAiReady = if (aiSettings.providerId == "local_builtin") localLoaded != null else aiSettings.preset.isLocal || aiSettings.apiKey.isNotBlank()
 
     var inputText by rememberSaveable { mutableStateOf("") }
+    var attachment by remember { mutableStateOf<TextAttachment.Item?>(null) }
+    var attachmentError by remember { mutableStateOf<String?>(null) }
+    val context = LocalContext.current
+    val attachmentScope = rememberCoroutineScope()
+    val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) attachmentScope.launch {
+            try { attachment = withContext(Dispatchers.IO) { TextAttachment.read(context, uri) }; attachmentError = null }
+            catch (e: Exception) { attachmentError = e.message ?: "Could not read file" }
+        }
+    }
+    LaunchedEffect(currentSession.id) { attachment = null; attachmentError = null }
     var exportSnapshot by remember { mutableStateOf<org.levimc.zaphre.ai.ChatSession?>(null) }
     val exportPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
         val snapshot = exportSnapshot
@@ -300,14 +316,23 @@ fun ChatScreen(
                 }
             }
 
-            // Bottom ChatGPT-style composer bar
+            // Attachments are deliberately explicit: this path supports UTF-8 text only.
+            attachment?.let { item ->
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Attached: ${item.name}", modifier = Modifier.weight(1f), color = ZaphSubtext, fontSize = 12.sp)
+                    TextButton(onClick = { attachment = null }) { Text("Remove") }
+                }
+            }
+            attachmentError?.let { Text(it, color = ZaphRed, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp)) }
             ChatComposerBar(
                 value = inputText,
                 onValueChange = { inputText = it },
                 busy = agentBusy,
+                onAttach = { filePicker.launch(arrayOf("text/*", "application/json", "application/javascript", "application/octet-stream")) },
                 onSend = {
-                    val toSend = inputText
+                    val toSend = attachment?.let { TextAttachment.compose(inputText, it) } ?: inputText
                     inputText = ""
+                    attachment = null
                     vm.sendPrompt(toSend)
                 },
                 onStop = { vm.stopAgentLoop() }
@@ -775,6 +800,7 @@ private fun ChatComposerBar(
     value: String,
     onValueChange: (String) -> Unit,
     busy: Boolean,
+    onAttach: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit
 ) {
@@ -788,6 +814,9 @@ private fun ChatComposerBar(
                 .padding(horizontal = 10.dp, vertical = 8.dp),
             verticalAlignment = Alignment.Bottom
         ) {
+            IconButton(onClick = onAttach, enabled = !busy) {
+                Icon(Icons.Default.AttachFile, contentDescription = "Attach UTF-8 text file", tint = ZaphSubtext)
+            }
             OutlinedTextField(
                 value = value,
                 onValueChange = onValueChange,
