@@ -594,6 +594,7 @@ object McTargetManager {
         )
     }
 
+    @Synchronized
     fun ensureTargetLibsExtracted(
         context: Context,
         target: McTarget,
@@ -631,6 +632,11 @@ object McTargetManager {
             return outDir
         }
 
+        // Build a fresh cache whenever the APK fingerprint changes. Never reuse .so files
+        // from the previous version: APKs can lack extracted nativeLibraryDir entries.
+        val staging = File(cacheLibsRoot(context), "installed_mc_staging-${java.util.UUID.randomUUID()}")
+        if (!staging.mkdirs()) throw IOException("Could not create Minecraft extraction staging directory")
+        try {
         onLog("Extracting Minecraft ${target.versionName} arm64-v8a libraries...")
         var count = 0
         // Copy from nativeLibraryDir first if system already extracted them
@@ -640,7 +646,7 @@ object McTargetManager {
                 if (src.isFile && src.name.endsWith(".so") && src.length() > 0 &&
                     src.name != "libPlayFabMultiplayer.so" && src.name != "libmaesdk.so"
                 ) {
-                    val dst = File(outDir, src.name)
+                    val dst = File(staging, src.name)
                     copyToReadOnly(src, dst)
                     count++
                     onLog("Copied ${src.name} (${src.length() / 1024} KB)")
@@ -649,14 +655,25 @@ object McTargetManager {
         }
         // Extract any remaining arm64-v8a/*.so from base + split APKs
         for (apk in apks) {
-            count += extractArm64LibsFromApk(apk, outDir, onLog, skipExisting = !forceRefresh)
+            count += extractArm64LibsFromApk(apk, staging, onLog, skipExisting = true)
         }
-        if (!mcSo.isFile || mcSo.length() == 0L) {
+        val stagedMc = File(staging, "libminecraftpe.so")
+        if (!stagedMc.isFile || stagedMc.length() == 0L) {
             throw IOException("Installed Minecraft (${target.versionName}) does not contain arm64-v8a/libminecraftpe.so")
         }
-        marker.writeText(fingerprint)
+        File(staging, ".manifest").writeText(fingerprint)
+        val old = File(cacheLibsRoot(context), "installed_mc_previous-${java.util.UUID.randomUUID()}")
+        if (outDir.exists() && !outDir.renameTo(old)) throw IOException("Could not preserve previous Minecraft cache")
+        if (!staging.renameTo(outDir)) {
+            if (old.exists() && !old.renameTo(outDir)) onLog("Previous cache retained at ${old.name}")
+            throw IOException("Could not install refreshed Minecraft cache")
+        }
+        old.deleteRecursively()
         onLog("Prepared $count native libraries for MC ${target.versionName}")
         return outDir
+        } finally {
+            if (staging.exists()) staging.deleteRecursively()
+        }
     }
 
     private fun extractArm64LibsFromApk(

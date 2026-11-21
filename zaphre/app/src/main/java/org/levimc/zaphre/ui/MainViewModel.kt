@@ -251,16 +251,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     // ---- Chat actions ----
 
     fun newChatSession() {
-        if (_agentBusy.value) return
+        if (_agentBusy.value) { notify("Stop the current response before starting a new chat"); return }
         _currentSession.value = ChatSession()
     }
 
     fun openSession(session: ChatSession) {
-        if (_agentBusy.value) return
+        if (_agentBusy.value) { notify("Stop the current response before switching chats"); return }
         _currentSession.value = session
     }
 
     fun deleteSession(sessionId: String) {
+        if (_agentBusy.value && _currentSession.value.id == sessionId) { notify("Stop the current response before deleting this chat"); return }
         viewModelScope.launch(Dispatchers.IO) {
             ChatHistoryStore.deleteSession(appCtx, sessionId)
             val updated = ChatHistoryStore.listSessions(appCtx)

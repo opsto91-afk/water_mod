@@ -101,7 +101,10 @@ jobs:
           path: zaphre/dist/ZaphRE-v3.1.0-side-by-side-arm64.apk
           if-no-files-found: error
 
+      # In-progress builds are tested and uploaded as Actions artifacts only.
+      # Do not publish an incomplete release on every push.
       - name: Publish Direct-Download APK on GitHub Releases
+        if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
