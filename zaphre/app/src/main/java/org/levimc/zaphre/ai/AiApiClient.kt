@@ -61,7 +61,44 @@ object AiApiClient {
         .readTimeout(180, TimeUnit.SECONDS)
         .build()
 
+    private class RateLimitException(val seconds: Long) : IOException("Provider rate limit reached. Retry after ${seconds}s.")
+    private val keyCooldowns = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    private fun cooldownKey(settings: ActiveAiSettings, key: String): String {
+        val bytes = java.security.MessageDigest.getInstance("SHA-256").digest((settings.providerId + "|" + settings.baseUrl + "|" + key).toByteArray())
+        return bytes.joinToString("") { "%02x".format(it) }
+    }
+    private fun rateLimit(response: Response): RateLimitException {
+        val seconds = response.header("Retry-After")?.toLongOrNull()?.coerceIn(1, 3600) ?: 60L
+        return RateLimitException(seconds)
+    }
+
+    /** Rotate only on explicit HTTP 429; no tool calls are executed or replayed here. */
     suspend fun chat(
+        settings: ActiveAiSettings,
+        systemPrompt: String,
+        history: List<AgentTurnItem>,
+        tools: List<ToolSchema>,
+        onPartial: ((String) -> Unit)? = null
+    ): ModelResponse {
+        val keys = (listOf(settings.apiKey) + settings.additionalKeys).filter { it.isNotBlank() }.distinct()
+        if (!settings.autoSwitchKeys || settings.preset.isLocal || keys.size < 2) {
+            return chatOnce(settings, systemPrompt, history, tools, onPartial)
+        }
+        val now = System.currentTimeMillis()
+        val available = keys.filter { (keyCooldowns[cooldownKey(settings, it)] ?: 0L) <= now }
+        if (available.isEmpty()) throw IOException("All configured keys are cooling down. Please wait before retrying.")
+        for (key in available) {
+            currentCoroutineContext().ensureActive()
+            try {
+                return chatOnce(settings.copy(apiKey = key), systemPrompt, history, tools, onPartial)
+            } catch (e: RateLimitException) {
+                keyCooldowns[cooldownKey(settings, key)] = System.currentTimeMillis() + e.seconds * 1000
+            }
+        }
+        throw IOException("All available keys hit HTTP 429. Wait for their cooldown and retry; quotas may be shared.")
+    }
+
+    private suspend fun chatOnce(
         settings: ActiveAiSettings,
         systemPrompt: String,
         history: List<AgentTurnItem>,
@@ -106,6 +143,7 @@ object AiApiClient {
                     callOpenAiCompat(settings, effectiveSystem, history, nativeTools, job)
                 } catch (e: IOException) {
                     currentCoroutineContext().ensureActive()
+                    if (e is RateLimitException) throw e
                     // Auto-fallback to XML prompt tool mode if a local/reasoning model rejects `tools`
                     val msg = e.message.orEmpty().lowercase()
                     if (nativeTools.isNotEmpty() &&
@@ -306,6 +344,7 @@ object AiApiClient {
         executeChatRequest(req, job) { resp ->
             val raw = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
+                if (resp.code == 429) throw rateLimit(resp)
                 throw IOException("Gemini API ${resp.code}: ${extractApiError(raw)}")
             }
             val root = JSONObject(raw)
@@ -448,6 +487,7 @@ object AiApiClient {
         executeChatRequest(rb.build(), job) { resp ->
             val raw = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
+                if (resp.code == 429) throw rateLimit(resp)
                 throw IOException("${settings.preset.name} HTTP ${resp.code}: ${extractApiError(raw)}")
             }
             val root = JSONObject(raw)
@@ -556,6 +596,7 @@ object AiApiClient {
         executeChatRequest(req, job) { resp ->
             val raw = resp.body?.string().orEmpty()
             if (!resp.isSuccessful) {
+                if (resp.code == 429) throw rateLimit(resp)
                 throw IOException("Claude HTTP ${resp.code}: ${extractApiError(raw)}")
             }
             val root = JSONObject(raw)

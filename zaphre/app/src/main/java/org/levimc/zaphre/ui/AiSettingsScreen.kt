@@ -42,6 +42,7 @@ import androidx.compose.material3.Slider
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -93,6 +94,9 @@ fun AiSettingsScreen(vm: MainViewModel) {
 
     var baseUrl by remember { mutableStateOf(saved.baseUrl) }
     var apiKey by remember { mutableStateOf(saved.apiKey) }
+    var extraKeys by remember { mutableStateOf(saved.additionalKeys) }
+    var newKey by remember { mutableStateOf("") }
+    var autoSwitchKeys by remember { mutableStateOf(saved.autoSwitchKeys) }
     var model by remember { mutableStateOf(saved.model) }
     var toolMode by remember { mutableStateOf(saved.toolCallMode) }
     var maxSteps by remember { mutableIntStateOf(saved.maxAgentSteps) }
@@ -105,6 +109,9 @@ fun AiSettingsScreen(vm: MainViewModel) {
     LaunchedEffect(saved) {
         baseUrl = saved.baseUrl
         apiKey = saved.apiKey
+        extraKeys = saved.additionalKeys
+        newKey = ""
+        autoSwitchKeys = saved.autoSwitchKeys
         model = saved.model
         toolMode = saved.toolCallMode
         maxSteps = saved.maxAgentSteps
@@ -116,6 +123,8 @@ fun AiSettingsScreen(vm: MainViewModel) {
     fun currentDraft() = saved.copy(
         baseUrl = baseUrl.trim().trimEnd('/'),
         apiKey = apiKey.trim(),
+        additionalKeys = extraKeys,
+        autoSwitchKeys = autoSwitchKeys,
         model = model.trim().ifBlank { saved.preset.defaultModel },
         toolCallMode = toolMode,
         maxAgentSteps = maxSteps,
@@ -242,6 +251,30 @@ fun AiSettingsScreen(vm: MainViewModel) {
                         },
                         modifier = Modifier.fillMaxWidth()
                     )
+
+                    if (saved.additionalKeysUnavailable) Text("Additional keys cannot be decrypted on this device. Existing encrypted data was preserved; settings cannot be saved until resolved.", color = ZaphRed, fontSize = 12.sp)
+                    Text("Additional keys: ${extraKeys.size} (same provider and endpoint)", color = ZaphSubtext, fontSize = 12.sp)
+                    extraKeys.forEachIndexed { index, _ ->
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Text("Key ${index + 2} · saved", modifier = Modifier.weight(1f), color = ZaphSubtext)
+                            TextButton(onClick = { extraKeys = extraKeys.filterIndexed { i, _ -> i != index } }) { Text("Remove") }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = newKey, onValueChange = { newKey = it },
+                        label = { Text("Add another key") }, singleLine = true,
+                        visualTransformation = PasswordVisualTransformation(), modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedButton(onClick = {
+                        val key = newKey.trim()
+                        if (key.isNotEmpty() && key != apiKey && key !in extraKeys) extraKeys = extraKeys + key
+                        newKey = ""
+                    }) { Text("Add key") }
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Auto switch on HTTP 429", modifier = Modifier.weight(1f), color = ZaphText)
+                        Switch(checked = autoSwitchKeys, onCheckedChange = { autoSwitchKeys = it })
+                    }
+                    Text("Save settings to apply. Additional keys use device Keystore; the existing primary key uses the legacy settings storage. Shared provider quotas may still block all keys.", color = ZaphSubtext, fontSize = 11.sp)
 
                     OutlinedTextField(
                         value = baseUrl,

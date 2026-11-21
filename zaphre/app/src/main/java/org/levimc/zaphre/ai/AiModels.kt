@@ -185,6 +185,9 @@ data class ActiveAiSettings(
     val protocol: ApiProtocol = ApiProtocol.GEMINI_NATIVE,
     val baseUrl: String = "https://generativelanguage.googleapis.com/v1beta",
     val apiKey: String = "",
+    val additionalKeys: List<String> = emptyList(),
+    val additionalKeysUnavailable: Boolean = false,
+    val autoSwitchKeys: Boolean = false,
     val model: String = "gemini-2.5-flash",
     val toolCallMode: ToolCallMode = ToolCallMode.NATIVE_AUTO,
     val maxAgentSteps: Int = 25,
@@ -205,6 +208,7 @@ object AiSettingsStore {
         val preset = BUILTIN_PROVIDERS.firstOrNull { it.id == pid } ?: BUILTIN_PROVIDERS.first()
         val baseUrl = p.getString("url_$pid", preset.baseUrl)?.ifBlank { preset.baseUrl } ?: preset.baseUrl
         val key = p.getString("key_$pid", "") ?: ""
+        val keyLoad = runCatching { ExtraKeyStore.load(context, pid) }
         val model = p.getString("model_$pid", preset.defaultModel)?.ifBlank { preset.defaultModel } ?: preset.defaultModel
         val tcMode = p.getString("tool_mode_$pid", ToolCallMode.NATIVE_AUTO.name)
             .let { n -> ToolCallMode.entries.firstOrNull { it.name == n } ?: ToolCallMode.NATIVE_AUTO }
@@ -214,6 +218,9 @@ object AiSettingsStore {
             protocol = preset.protocol,
             baseUrl = baseUrl.trim().trimEnd('/'),
             apiKey = key.trim(),
+            additionalKeys = keyLoad.getOrDefault(emptyList()),
+            additionalKeysUnavailable = keyLoad.isFailure,
+            autoSwitchKeys = p.getBoolean("auto_switch_$pid", false),
             model = model.trim(),
             toolCallMode = tcMode,
             maxAgentSteps = p.getInt("max_steps", 25).coerceIn(3, 80),
@@ -225,10 +232,13 @@ object AiSettingsStore {
 
     fun save(context: Context, s: ActiveAiSettings) {
         val pid = s.providerId
+        check(!s.additionalKeysUnavailable) { "Additional keys are unavailable on this device; encrypted data was not overwritten" }
+        ExtraKeyStore.save(context, pid, s.additionalKeys.map { it.trim() }.filter { it.isNotEmpty() }.distinct())
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString("active_provider", pid)
             .putString("url_$pid", s.baseUrl.trim().trimEnd('/'))
             .putString("key_$pid", s.apiKey.trim())
+            .putBoolean("auto_switch_$pid", s.autoSwitchKeys)
             .putString("model_$pid", s.model.trim())
             .putString("tool_mode_$pid", s.toolCallMode.name)
             .putInt("max_steps", s.maxAgentSteps.coerceIn(3, 80))

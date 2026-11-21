@@ -728,19 +728,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveAiSettings(updated: ActiveAiSettings) {
-        AiSettingsStore.save(appCtx, updated)
-        _aiSettings.value = AiSettingsStore.load(appCtx)
-        notify("Saved ${updated.preset.name} (${updated.model})")
+        runCatching { AiSettingsStore.save(appCtx, updated) }.onSuccess {
+            _aiSettings.value = AiSettingsStore.load(appCtx)
+            notify("Saved ${updated.preset.name} (${updated.model})")
+        }.onFailure { notify("Could not save settings: ${it.message}") }
     }
 
     fun quickPickModel(modelName: String) {
         val updated = _aiSettings.value.copy(model = modelName.trim())
-        AiSettingsStore.save(appCtx, updated)
-        _aiSettings.value = updated
+        runCatching { AiSettingsStore.save(appCtx, updated) }.onSuccess { _aiSettings.value = updated }
+            .onFailure { notify("Could not save settings: ${it.message}") }
     }
 
     fun fetchModelsFromApi(current: ActiveAiSettings) {
-        AiSettingsStore.save(appCtx, current)
+        if (runCatching { AiSettingsStore.save(appCtx, current) }.isFailure) { notify("Could not save provider settings"); return }
         _aiSettings.value = current
         _aiTestStatus.value = "Fetching models from ${current.preset.name}..."
         viewModelScope.launch {
@@ -758,7 +759,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun testAiConnection(current: ActiveAiSettings) {
-        AiSettingsStore.save(appCtx, current)
+        if (runCatching { AiSettingsStore.save(appCtx, current) }.isFailure) { notify("Could not save provider settings"); return }
         _aiSettings.value = current
         _aiTestStatus.value = "Testing ${current.model}..."
         viewModelScope.launch {
