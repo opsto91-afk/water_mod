@@ -131,19 +131,55 @@ fun ChatScreen(
     val sessions by vm.sessions.collectAsState()
     val currentSession by vm.currentSession.collectAsState()
     val agentBusy by vm.agentBusy.collectAsState()
+    val agentPaused by vm.agentPaused.collectAsState()
+    val recoveryAvailable by vm.recoveryAvailable.collectAsState()
+    var confirmDiscardJob by remember { mutableStateOf(false) }
     val keySwitchRequest by vm.keySwitchRequest.collectAsState()
     val createRequest by vm.createRequest.collectAsState()
+    val githubRequest by vm.githubRequest.collectAsState()
+    val modifyRequest by vm.modifyRequest.collectAsState()
+    val interruptedToolRequest by vm.interruptedToolRequest.collectAsState()
+    val workspaceWriteRequest by vm.workspaceWriteRequest.collectAsState()
     val liveDraft by vm.liveDraft.collectAsState()
     val bgSnapshot by vm.bgSnapshot.collectAsState()
     val aiSettings by vm.aiSettings.collectAsState()
+    val customProfiles by vm.customProfiles.collectAsState()
     val selectedTarget by vm.selectedTarget.collectAsState()
     val mods by vm.installedMods.collectAsState()
 
+    if (confirmDiscardJob) AlertDialog(onDismissRequest = { confirmDiscardJob = false }, title = { Text("Discard saved job checkpoint?") },
+        text = { Text("This removes the resumable job state, not saved chats. An interrupted tool may already have changed files; review its outcome before repeating it.") },
+        confirmButton = { TextButton(onClick = { vm.discardSavedAgent(); confirmDiscardJob = false }) { Text("Discard") } },
+        dismissButton = { TextButton(onClick = { confirmDiscardJob = false }) { Text("Keep") } })
+    workspaceWriteRequest?.let { request ->
+        AlertDialog(onDismissRequest = { vm.decideWorkspaceWrite(false) }, title = { Text("Write workspace file?") },
+            text = { Text("${if (request.append) "Append to" else "Create or replace"}: ${request.path}\nPreview (first 1000 characters):\n${request.content.take(1000)}") },
+            confirmButton = { TextButton(onClick = { vm.decideWorkspaceWrite(true) }) { Text("Allow") } },
+            dismissButton = { TextButton(onClick = { vm.decideWorkspaceWrite(false) }) { Text("Deny") } })
+    }
+    interruptedToolRequest?.let { request ->
+        AlertDialog(onDismissRequest = { vm.decideInterruptedTool(false) }, title = { Text("Review tool after interruption") },
+            text = { Text("A previous tool was interrupted and may already have changed files or run a command. Review before allowing this next tool.\n\n${request.name}\n${request.arguments}") },
+            confirmButton = { TextButton(onClick = { vm.decideInterruptedTool(true) }) { Text("Allow") } },
+            dismissButton = { TextButton(onClick = { vm.decideInterruptedTool(false) }) { Text("Deny") } })
+    }
+    modifyRequest?.let { request ->
+        AlertDialog(onDismissRequest = { vm.decideModify(false) }, title = { Text(if (request.deleting) "Delete selected file?" else "Replace selected file?") },
+            text = { Text("Folder: ${request.tree}\nFile: ${request.path}\n" + if (request.deleting) "A recovery copy is kept in app storage." else "A recovery copy is kept in app storage. Preview (first 1000 characters):\n${request.content.take(1000)}") },
+            confirmButton = { TextButton(onClick = { vm.decideModify(true) }) { Text(if (request.deleting) "Delete" else "Replace") } },
+            dismissButton = { TextButton(onClick = { vm.decideModify(false) }) { Text("Deny") } })
+    }
+    githubRequest?.let { request ->
+        AlertDialog(onDismissRequest = { vm.decideGitHub(false) }, title = { Text(if (request.update) "Update GitHub file?" else "Create GitHub file?") },
+            text = { Text("${request.target}\nFile: ${request.path}\nCommit: ${request.message}\nPreview (first 1000 characters):\n${request.content.take(1000)}") },
+            confirmButton = { TextButton(onClick = { vm.decideGitHub(true) }) { Text("Commit") } },
+            dismissButton = { TextButton(onClick = { vm.decideGitHub(false) }) { Text("Deny") } })
+    }
     createRequest?.let { request ->
         AlertDialog(
             onDismissRequest = { vm.decideCreate(false) },
             title = { Text("Create in selected folder?") },
-            text = { Text("${if (request.directory) "Folder" else "File"}: ${request.path}\n" + if (request.directory) "" else "Preview (first 1000 characters):\n${request.content.take(1000)}") },
+            text = { Text("Selected folder: ${request.tree}\n${if (request.directory) "Folder" else "File"}: ${request.path}\n" + if (request.directory) "" else "Preview (first 1000 characters):\n${request.content.take(1000)}") },
             confirmButton = { TextButton(onClick = { vm.decideCreate(true) }) { Text("Create") } },
             dismissButton = { TextButton(onClick = { vm.decideCreate(false) }) { Text("Deny") } }
         )
@@ -164,16 +200,29 @@ fun ChatScreen(
 
     var inputText by rememberSaveable { mutableStateOf("") }
     var attachment by remember { mutableStateOf<TextAttachment.Item?>(null) }
+    var mediaAttachment by remember { mutableStateOf<org.levimc.zaphre.ai.MediaAttachment.Item?>(null) }
     var attachmentError by remember { mutableStateOf<String?>(null) }
     val context = LocalContext.current
     val attachmentScope = rememberCoroutineScope()
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) attachmentScope.launch {
-            try { attachment = withContext(Dispatchers.IO) { TextAttachment.read(context, uri) }; attachmentError = null }
+            try {
+                val mime = context.contentResolver.getType(uri).orEmpty()
+                if (mime == "application/pdf" || mime.startsWith("image/") || mime.startsWith("video/")) {
+                    mediaAttachment = withContext(Dispatchers.IO) { org.levimc.zaphre.ai.MediaAttachment.read(context, uri) }; attachment = null
+                } else { attachment = withContext(Dispatchers.IO) { TextAttachment.read(context, uri) }; mediaAttachment = null }
+                attachmentError = null
+            }
             catch (e: Exception) { attachmentError = e.message ?: "Could not read file" }
         }
     }
-    LaunchedEffect(currentSession.id) { attachment = null; attachmentError = null }
+    LaunchedEffect(currentSession.id) { attachment = null; mediaAttachment = null; attachmentError = null }
+    val archiveImportPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.importChatArchive(uri)
+    }
+    val archiveExportPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri != null) vm.exportChatArchive(uri)
+    }
     var exportSnapshot by remember { mutableStateOf<org.levimc.zaphre.ai.ChatSession?>(null) }
     val exportPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
         val snapshot = exportSnapshot
@@ -227,6 +276,10 @@ fun ChatScreen(
                                 Text("New", color = ZaphPrimary, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
                             }
                         }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                        TextButton(onClick = { archiveImportPicker.launch(arrayOf("application/json", "text/plain", "*/*")) }, enabled = !agentBusy) { Text("Import chats", fontSize = 11.sp) }
+                        TextButton(onClick = { archiveExportPicker.launch("PETA-chats.json") }, enabled = !agentBusy && sessions.isNotEmpty()) { Text("Backup chats", fontSize = 11.sp) }
                     }
                     Spacer(Modifier.height(12.dp))
                     HorizontalDivider(color = ZaphBorder)
@@ -303,6 +356,16 @@ fun ChatScreen(
                 onExport = { exportSnapshot = currentSession; exportPicker.launch("ZaphRE-chat.txt") },
                 canExport = currentSession.messages.isNotEmpty() && !agentBusy
             )
+            if (customProfiles.isNotEmpty()) {
+                Row(modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()).padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Profiles:", color = ZaphSubtext, fontSize = 11.sp)
+                    customProfiles.forEach { profile ->
+                        TextButton(onClick = { vm.switchAiProvider(profile.id) }, enabled = !agentBusy) {
+                            Text(profile.name, color = if (aiSettings.providerId == profile.id) ZaphPrimary else ZaphSubtext, fontSize = 11.sp)
+                        }
+                    }
+                }
+            }
             HorizontalDivider(color = ZaphBorder.copy(alpha = 0.6f))
 
             // Main chat area
@@ -338,11 +401,36 @@ fun ChatScreen(
                 }
             }
 
-            // Attachments are deliberately explicit: this path supports UTF-8 text only.
+            if (!agentBusy && recoveryAvailable) {
+                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Saved agent job found", color = ZaphSubtext, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { vm.recoverAgentFromService(false) }) { Text("Resume / review") }
+                    TextButton(onClick = { confirmDiscardJob = true }) { Text("Discard") }
+                }
+            }
+            if (!agentBusy && !recoveryAvailable && currentSession.messages.lastOrNull()?.let { it.modelTag.startsWith("Checkpoint") || it.role == ChatRole.USER || it.toolSteps.any { step -> step.running } } == true) {
+                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Previous turn may be interrupted. Check tool outcomes; reattach media if needed.", color = ZaphSubtext, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { vm.sendPrompt("Continue from the saved checkpoint. Do not repeat completed or uncertain tool actions without my approval; verify their outcomes first.") }) { Text("Continue") }
+                }
+            }
+            if (agentBusy) {
+                Row(modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(if (agentPaused) "Pause requested / paused" else "Agent running", color = ZaphSubtext, fontSize = 11.sp, modifier = Modifier.weight(1f))
+                    TextButton(onClick = { vm.setAgentPaused(!agentPaused) }) { Text(if (agentPaused) "Resume" else "Pause") }
+                }
+            }
+            // Attachments are chosen explicitly.
             attachment?.let { item ->
                 Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
                     Text("Attached: ${item.name}", modifier = Modifier.weight(1f), color = ZaphSubtext, fontSize = 12.sp)
                     TextButton(onClick = { attachment = null }) { Text("Remove") }
+                }
+            }
+            mediaAttachment?.let { item ->
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text("Attached: ${item.name} (${item.mime})", modifier = Modifier.weight(1f), color = ZaphSubtext, fontSize = 12.sp)
+                    TextButton(onClick = { mediaAttachment = null }) { Text("Remove") }
                 }
             }
             attachmentError?.let { Text(it, color = ZaphRed, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 12.dp)) }
@@ -350,12 +438,15 @@ fun ChatScreen(
                 value = inputText,
                 onValueChange = { inputText = it },
                 busy = agentBusy,
-                onAttach = { filePicker.launch(arrayOf("text/*", "application/json", "application/javascript", "application/octet-stream")) },
+                hasAttachment = attachment != null || mediaAttachment != null,
+                onAttach = { filePicker.launch(arrayOf("text/*", "application/json", "application/javascript", "application/octet-stream", "application/pdf", "image/*", "video/*")) },
                 onSend = {
                     val toSend = attachment?.let { TextAttachment.compose(inputText, it) } ?: inputText
+                    val media = mediaAttachment
                     inputText = ""
                     attachment = null
-                    vm.sendPrompt(toSend)
+                    mediaAttachment = null
+                    vm.sendPrompt(toSend.ifBlank { "Please analyze this attachment." }, media)
                 },
                 onStop = { vm.stopAgentLoop() }
             )
@@ -822,6 +913,7 @@ private fun ChatComposerBar(
     value: String,
     onValueChange: (String) -> Unit,
     busy: Boolean,
+    hasAttachment: Boolean,
     onAttach: () -> Unit,
     onSend: () -> Unit,
     onStop: () -> Unit
@@ -837,7 +929,7 @@ private fun ChatComposerBar(
             verticalAlignment = Alignment.Bottom
         ) {
             IconButton(onClick = onAttach, enabled = !busy) {
-                Icon(Icons.Default.AttachFile, contentDescription = "Attach UTF-8 text file", tint = ZaphSubtext)
+                Icon(Icons.Default.AttachFile, contentDescription = "Attach file", tint = ZaphSubtext)
             }
             OutlinedTextField(
                 value = value,
@@ -874,7 +966,7 @@ private fun ChatComposerBar(
                     }
                 }
             } else {
-                val canSend = value.isNotBlank()
+                val canSend = value.isNotBlank() || hasAttachment
                 Surface(
                     onClick = { if (canSend) onSend() },
                     shape = CircleShape,

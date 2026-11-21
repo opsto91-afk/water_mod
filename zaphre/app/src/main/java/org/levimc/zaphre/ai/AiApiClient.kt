@@ -24,7 +24,7 @@ data class ToolSchema(
 )
 
 sealed class AgentTurnItem {
-    data class User(val text: String) : AgentTurnItem()
+    data class User(val text: String, val media: MediaAttachment.Item? = null) : AgentTurnItem()
     data class Assistant(
         val text: String,
         val toolCalls: List<ToolCallSpec> = emptyList(),
@@ -63,12 +63,29 @@ object AiApiClient {
 
     private class RateLimitException(val seconds: Long) : IOException("Provider rate limit reached. Retry after ${seconds}s.")
     private val keyCooldowns = java.util.concurrent.ConcurrentHashMap<String, Long>()
+    @Volatile private var cooldownPrefs: android.content.SharedPreferences? = null
+    fun initialize(context: android.content.Context) {
+        cooldownPrefs = context.applicationContext.getSharedPreferences("peta_key_cooldowns", android.content.Context.MODE_PRIVATE)
+    }
+    private fun cooldownUntil(id: String): Long = maxOf(keyCooldowns[id] ?: 0L, cooldownPrefs?.getLong(id, 0L) ?: 0L)
+    private fun saveCooldown(id: String, until: Long) {
+        keyCooldowns[id] = until
+        cooldownPrefs?.edit()?.putLong(id, until)?.apply()
+    }
     private fun cooldownKey(settings: ActiveAiSettings, key: String): String {
         val bytes = java.security.MessageDigest.getInstance("SHA-256").digest((settings.providerId + "|" + settings.baseUrl + "|" + key).toByteArray())
         return bytes.joinToString("") { "%02x".format(it) }
     }
     private fun rateLimit(response: Response): RateLimitException {
-        val seconds = response.header("Retry-After")?.toLongOrNull()?.coerceIn(1, 3600) ?: 60L
+        val header = response.header("Retry-After")?.trim()
+        val seconds = header?.toLongOrNull()?.coerceAtLeast(1) ?: header?.let {
+            runCatching {
+                val format = java.text.SimpleDateFormat("EEE, dd MMM yyyy HH:mm:ss zzz", java.util.Locale.US)
+                format.timeZone = java.util.TimeZone.getTimeZone("GMT")
+                val deadline = format.parse(it)?.time ?: return@runCatching 60L
+                ((deadline - System.currentTimeMillis()).coerceAtLeast(0) / 1000L + 1).coerceAtLeast(1)
+            }.getOrDefault(60L)
+        } ?: 60L
         return RateLimitException(seconds)
     }
 
@@ -79,28 +96,44 @@ object AiApiClient {
         history: List<AgentTurnItem>,
         tools: List<ToolSchema>,
         onPartial: ((String) -> Unit)? = null,
-        confirmKeySwitch: (suspend (Int) -> Boolean)? = null
+        confirmKeySwitch: (suspend (Int) -> Boolean)? = null,
+        awaitPermission: (suspend () -> Unit)? = null
     ): ModelResponse {
         val keys = (listOf(settings.apiKey) + settings.additionalKeys).filter { it.isNotBlank() }.distinct()
-        if ((!settings.autoSwitchKeys && !settings.askSwitchKeys) || settings.preset.isLocal || keys.size < 2) {
+        if ((!settings.autoSwitchKeys && !settings.askSwitchKeys) || settings.preset.isLocal || keys.isEmpty()) {
+            awaitPermission?.invoke()
             return chatOnce(settings, systemPrompt, history, tools, onPartial)
         }
-        val now = System.currentTimeMillis()
-        val available = keys.filter { (keyCooldowns[cooldownKey(settings, it)] ?: 0L) <= now }
-        if (available.isEmpty()) throw IOException("All configured keys are cooling down. Please wait before retrying.")
-        for (key in available) {
+        while (true) {
             currentCoroutineContext().ensureActive()
-            if (keys.indexOf(key) > 0 && settings.askSwitchKeys && !settings.autoSwitchKeys) {
-                val approved = confirmKeySwitch?.invoke(keys.indexOf(key) + 1) ?: false
-                if (!approved) throw IOException("Key switch declined or unavailable. Retry when ready.")
+            val now = System.currentTimeMillis()
+            val available = keys.filter { cooldownUntil(cooldownKey(settings, it)) <= now }
+            if (available.isEmpty()) {
+                val next = keys.minOf { cooldownUntil(cooldownKey(settings, it)) }
+                if (!settings.autoSwitchKeys) throw IOException("All configured keys are cooling down. Retry after their cooldown.")
+                val waitMs = (next - now).coerceAtLeast(1000L)
+                onPartial?.invoke("Rate limit: waiting until ${java.util.Date(next)} before retrying the model request. Stop cancels the wait.")
+                // Wake periodically to remain cancellable and account for wall-clock changes.
+                kotlinx.coroutines.delay(waitMs.coerceAtMost(60_000L))
+                continue
             }
-            try {
-                return chatOnce(settings.copy(apiKey = key), systemPrompt, history, tools, onPartial)
-            } catch (e: RateLimitException) {
-                keyCooldowns[cooldownKey(settings, key)] = System.currentTimeMillis() + e.seconds * 1000
+            for (key in available) {
+                currentCoroutineContext().ensureActive()
+                awaitPermission?.invoke()
+                if (keys.indexOf(key) > 0 && settings.askSwitchKeys && !settings.autoSwitchKeys) {
+                    val approved = confirmKeySwitch?.invoke(keys.indexOf(key) + 1) ?: false
+                    if (!approved) throw IOException("Key switch declined or unavailable. Retry when ready.")
+                }
+                try {
+                    return chatOnce(settings.copy(apiKey = key), systemPrompt, history, tools, onPartial)
+                } catch (e: RateLimitException) {
+                    val nowMs = System.currentTimeMillis()
+                    val remaining = Long.MAX_VALUE - nowMs
+                    saveCooldown(cooldownKey(settings, key), if (e.seconds > remaining / 1000) Long.MAX_VALUE else nowMs + e.seconds * 1000)
+                }
             }
+            if (!settings.autoSwitchKeys) throw IOException("All available keys hit HTTP 429. Wait for their cooldown and retry; quotas may be shared.")
         }
-        throw IOException("All available keys hit HTTP 429. Wait for their cooldown and retry; quotas may be shared.")
     }
 
     private suspend fun chatOnce(
@@ -114,6 +147,15 @@ object AiApiClient {
             throw IOException("API key is empty for ${settings.preset.name}. Open the AI tab and paste your API key.")
         }
 
+        val media = history.filterIsInstance<AgentTurnItem.User>().mapNotNull { it.media }
+        for (attachment in media) {
+            val supported = when (settings.protocol) {
+                ApiProtocol.GEMINI_NATIVE -> true
+                ApiProtocol.OPENAI_COMPAT -> !settings.preset.isLocal && attachment.mime in setOf("image/jpeg", "image/png", "image/webp")
+                ApiProtocol.ANTHROPIC_NATIVE -> attachment.mime in setOf("image/jpeg", "image/png", "image/webp", "application/pdf")
+            }
+            if (!supported) throw IOException("This provider/format combination is not supported. Use Gemini native or a compatible image-capable provider.")
+        }
         val job = currentCoroutineContext()[Job]
         val usePromptXml = settings.toolCallMode == ToolCallMode.PROMPT_XML
         val effectiveSystem = if (usePromptXml && tools.isNotEmpty()) {
@@ -265,7 +307,11 @@ object AiApiClient {
                 is AgentTurnItem.User -> {
                     contents.put(JSONObject().apply {
                         put("role", "user")
-                        put("parts", JSONArray().put(JSONObject().put("text", item.text)))
+                        put("parts", JSONArray().put(JSONObject().put("text", item.text)).apply {
+                            item.media?.let { media -> put(JSONObject().put("inline_data", JSONObject()
+                                .put("mime_type", media.mime)
+                                .put("data", android.util.Base64.encodeToString(media.bytes, android.util.Base64.NO_WRAP)))) }
+                        })
                     })
                     i++
                 }
@@ -402,7 +448,9 @@ object AiApiClient {
         for (item in history) {
             when (item) {
                 is AgentTurnItem.User -> {
-                    messages.put(JSONObject().put("role", "user").put("content", item.text))
+                    val content: Any = item.media?.let { media -> JSONArray().put(JSONObject().put("type", "text").put("text", item.text))
+                        .put(JSONObject().put("type", "image_url").put("image_url", JSONObject().put("url", "data:${media.mime};base64,${android.util.Base64.encodeToString(media.bytes, android.util.Base64.NO_WRAP)}"))) } ?: item.text
+                    messages.put(JSONObject().put("role", "user").put("content", content))
                 }
                 is AgentTurnItem.Assistant -> {
                     if (tools.isEmpty()) {
@@ -535,7 +583,11 @@ object AiApiClient {
         while (i < history.size) {
             when (val item = history[i]) {
                 is AgentTurnItem.User -> {
-                    messages.put(JSONObject().put("role", "user").put("content", item.text))
+                    val content: Any = item.media?.let { media -> JSONArray()
+                        .put(JSONObject().put("type", "text").put("text", item.text))
+                        .put(JSONObject().put("type", if (media.mime == "application/pdf") "document" else "image")
+                            .put("source", JSONObject().put("type", "base64").put("media_type", media.mime).put("data", android.util.Base64.encodeToString(media.bytes, android.util.Base64.NO_WRAP)))) } ?: item.text
+                    messages.put(JSONObject().put("role", "user").put("content", content))
                     i++
                 }
                 is AgentTurnItem.Assistant -> {

@@ -10,6 +10,7 @@ class ZaphReApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        org.levimc.zaphre.ai.AiApiClient.initialize(this)
         createNotificationChannels()
     }
 

@@ -18,6 +18,14 @@ import org.levimc.zaphre.ui.theme.*
 
 @Composable
 fun LocalModelsScreen(vm: MainViewModel) {
+    var showHostedSettings by remember { mutableStateOf(false) }
+    if (showHostedSettings) {
+        Column(Modifier.fillMaxSize()) {
+            TextButton(onClick = { showHostedSettings = false }) { Text("← Back to models") }
+            Box(Modifier.weight(1f)) { AiSettingsScreen(vm) }
+        }
+        return
+    }
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val models by LocalLlama.models.collectAsState()
@@ -63,6 +71,15 @@ fun LocalModelsScreen(vm: MainViewModel) {
                         OutlinedButton(onClick = { picker.launch(arrayOf("*/*")) }, enabled = !transferring) { Text("Import GGUF") }
                         if (loaded != null) OutlinedButton(onClick = { scope.launch { LocalLlama.unloadModel() } }) { Text("Unload") }
                     }
+                }
+            }
+        }
+        item {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(Modifier.padding(14.dp)) {
+                    Text("Hosted AI profiles", fontWeight = FontWeight.SemiBold)
+                    Text("Create named OpenAI-compatible endpoints and choose models in AI settings.", fontSize = 12.sp)
+                    OutlinedButton(onClick = { showHostedSettings = true }) { Text("Set up hosted profiles") }
                 }
             }
         }

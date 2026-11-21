@@ -9,6 +9,7 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -53,7 +54,41 @@ data class TerminalEntry(
     val isError: Boolean
 )
 
-class MainViewModel(application: Application) : AndroidViewModel(application) {
+class MainViewModel private constructor(application: Application, private val serviceOnly: Boolean) : AndroidViewModel(application) {
+    constructor(application: Application) : this(application, false)
+
+    companion object {
+        // A turn belongs to the app process/foreground service, not an Activity ViewModel.
+        private val agentScope = kotlinx.coroutines.CoroutineScope(kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+        private val _toastMessage = MutableStateFlow<String?>(null)
+        private val _sessions = MutableStateFlow<List<ChatSession>>(emptyList())
+        private val _currentSession = MutableStateFlow(ChatSession())
+        private val _agentBusy = MutableStateFlow(false)
+        private val _agentPaused = MutableStateFlow(false)
+        private val _liveDraft = MutableStateFlow<ChatUiMessage?>(null)
+        private var agentJob: Job? = null
+        @Volatile private var preserveOnCancellation = false
+        private var serviceReady: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
+        fun markAgentServiceReady(success: Boolean) { serviceReady?.complete(success) }
+        private val _keySwitchRequest = MutableStateFlow<Int?>(null)
+        private var keySwitchDecision: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
+        private val _createRequest = MutableStateFlow<CreateRequest?>(null)
+        private var createDecision: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
+        private val _githubRequest = MutableStateFlow<GitHubRequest?>(null)
+        private var githubDecision: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
+        private val _modifyRequest = MutableStateFlow<ModifyRequest?>(null)
+        private var modifyDecision: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
+        private val _interruptedToolRequest = MutableStateFlow<InterruptedToolRequest?>(null)
+        private var interruptedToolDecision: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
+        private val _workspaceWriteRequest = MutableStateFlow<WorkspaceWriteRequest?>(null)
+        private var workspaceWriteDecision: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
+        private var sessionsInitialized = false
+        private val _recoveryAvailable = MutableStateFlow(false)
+        private val _recoveryChecking = MutableStateFlow(true)
+        fun forService(application: Application): MainViewModel = MainViewModel(application, true)
+        fun isAgentActive(): Boolean = _agentBusy.value
+        fun cancelFromService() { preserveOnCancellation = true; agentJob?.cancel(); LocalLlama.cancelInference() }
+    }
 
     private val appCtx = application.applicationContext
 
@@ -61,26 +96,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _activeTab = MutableStateFlow(MainTab.CHAT)
     val activeTab: StateFlow<MainTab> = _activeTab.asStateFlow()
 
-    private val _toastMessage = MutableStateFlow<String?>(null)
     val toastMessage: StateFlow<String?> = _toastMessage.asStateFlow()
 
     // Chat state
-    private val _sessions = MutableStateFlow<List<ChatSession>>(emptyList())
     val sessions: StateFlow<List<ChatSession>> = _sessions.asStateFlow()
 
-    private val _currentSession = MutableStateFlow(ChatSession())
     val currentSession: StateFlow<ChatSession> = _currentSession.asStateFlow()
 
-    private val _agentBusy = MutableStateFlow(false)
     val agentBusy: StateFlow<Boolean> = _agentBusy.asStateFlow()
 
-    private val _liveDraft = MutableStateFlow<ChatUiMessage?>(null)
+    val recoveryAvailable = _recoveryAvailable.asStateFlow()
+    val agentPaused = _agentPaused.asStateFlow()
+    fun setAgentPaused(paused: Boolean) {
+        if (_agentBusy.value) {
+            val prefs = appCtx.getSharedPreferences("peta_agent_control", android.content.Context.MODE_PRIVATE)
+            if (!prefs.edit().putBoolean("paused", paused).commit()) { notify("Could not save pause state"); return }
+            _agentPaused.value = paused
+        }
+    }
+
     val liveDraft: StateFlow<ChatUiMessage?> = _liveDraft.asStateFlow()
 
-    private var agentJob: Job? = null
-    private val _keySwitchRequest = MutableStateFlow<Int?>(null)
     val keySwitchRequest: StateFlow<Int?> = _keySwitchRequest.asStateFlow()
-    private var keySwitchDecision: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
 
     fun decideKeySwitch(approve: Boolean) { keySwitchDecision?.complete(approve) }
     private suspend fun askToSwitchKey(number: Int): Boolean {
@@ -91,16 +128,56 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         finally { _keySwitchRequest.value = null; keySwitchDecision = null }
     }
 
-    data class CreateRequest(val path: String, val directory: Boolean, val content: String)
-    private val _createRequest = MutableStateFlow<CreateRequest?>(null)
+    data class CreateRequest(val path: String, val directory: Boolean, val content: String, val tree: String)
     val createRequest: StateFlow<CreateRequest?> = _createRequest.asStateFlow()
-    private var createDecision: kotlinx.coroutines.CompletableDeferred<Boolean>? = null
     fun decideCreate(approve: Boolean) { createDecision?.complete(approve) }
-    private suspend fun askCreate(path: String, directory: Boolean, content: String): Boolean {
+    private suspend fun askCreate(path: String, directory: Boolean, content: String, tree: String): Boolean {
         val decision = kotlinx.coroutines.CompletableDeferred<Boolean>()
         createDecision = decision
-        _createRequest.value = CreateRequest(path, directory, content)
+        _createRequest.value = CreateRequest(path, directory, content, tree)
         try { return decision.await() } finally { _createRequest.value = null; createDecision = null }
+    }
+
+    data class GitHubRequest(val path: String, val content: String, val message: String, val target: String, val update: Boolean)
+    val githubRequest = _githubRequest.asStateFlow()
+    fun decideGitHub(approve: Boolean) { githubDecision?.complete(approve) }
+    private suspend fun askGitHub(path: String, content: String, message: String, target: String, update: Boolean): Boolean {
+        val config = org.levimc.zaphre.ai.GitHubIntegration.config(appCtx)
+        if (!config.enabled) return false
+        val decision = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        githubDecision = decision
+        _githubRequest.value = GitHubRequest(path, content, message, target, update)
+        try { return decision.await() } finally { _githubRequest.value = null; githubDecision = null }
+    }
+
+    data class ModifyRequest(val path: String, val deleting: Boolean, val content: String, val tree: String)
+    val modifyRequest = _modifyRequest.asStateFlow()
+    fun decideModify(approve: Boolean) { modifyDecision?.complete(approve) }
+    private suspend fun askModify(path: String, deleting: Boolean, content: String, tree: String): Boolean {
+        val decision = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        modifyDecision = decision
+        _modifyRequest.value = ModifyRequest(path, deleting, content, tree)
+        try { return decision.await() } finally { _modifyRequest.value = null; modifyDecision = null }
+    }
+
+    data class InterruptedToolRequest(val name: String, val arguments: String)
+    val interruptedToolRequest = _interruptedToolRequest.asStateFlow()
+    fun decideInterruptedTool(approve: Boolean) { interruptedToolDecision?.complete(approve) }
+    private suspend fun askInterruptedTool(name: String, arguments: String): Boolean {
+        val decision = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        interruptedToolDecision = decision
+        _interruptedToolRequest.value = InterruptedToolRequest(name, arguments)
+        try { return decision.await() } finally { _interruptedToolRequest.value = null; interruptedToolDecision = null }
+    }
+
+    data class WorkspaceWriteRequest(val path: String, val append: Boolean, val content: String)
+    val workspaceWriteRequest = _workspaceWriteRequest.asStateFlow()
+    fun decideWorkspaceWrite(approve: Boolean) { workspaceWriteDecision?.complete(approve) }
+    private suspend fun askWorkspaceWrite(path: String, append: Boolean, content: String): Boolean {
+        val decision = kotlinx.coroutines.CompletableDeferred<Boolean>()
+        workspaceWriteDecision = decision
+        _workspaceWriteRequest.value = WorkspaceWriteRequest(path, append, content)
+        try { return decision.await() } finally { _workspaceWriteRequest.value = null; workspaceWriteDecision = null }
     }
 
     // BG Runner & Zaphkiel state
@@ -186,16 +263,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val aiTestStatus: StateFlow<String?> = _aiTestStatus.asStateFlow()
 
     init {
+        if (!serviceOnly) {
+        val initializeSessions = !sessionsInitialized
+        val initialSessionId = _currentSession.value.id
+        sessionsInitialized = true
         viewModelScope.launch(Dispatchers.IO) {
-            ZaphkielConfig.ensureWorkspaceLayout(appCtx)
-            refreshAll()
+            runCatching { ZaphkielConfig.ensureWorkspaceLayout(appCtx); refreshAll() }
+                .onFailure { notify("Could not load workspace: ${it.message}") }
             val saved = ChatHistoryStore.listSessions(appCtx)
             _sessions.value = saved
-            if (saved.isNotEmpty()) {
-                _currentSession.value = saved.first()
+            if (initializeSessions && !_agentBusy.value && _currentSession.value.id == initialSessionId && saved.isNotEmpty()) _currentSession.value = saved.first()
+            if (initializeSessions && !_agentBusy.value) {
+                val savedJob = runCatching { org.levimc.zaphre.ai.AgentCheckpoint.load(appCtx) }.getOrNull()
+                val paused = appCtx.getSharedPreferences("peta_agent_control", android.content.Context.MODE_PRIVATE).getBoolean("paused", false)
+                if (!_agentBusy.value) {
+                    _recoveryAvailable.value = savedJob != null
+                    if (savedJob != null && !paused && savedJob.state in setOf("safe", "completed") && savedJob.providerId != "local_builtin") recoverAgentFromService(false)
+                }
             }
+            _recoveryChecking.value = false
         }
         startBgPoller()
+        }
     }
 
     private fun startBgPoller() {
@@ -297,12 +386,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun sendPrompt(rawText: String) {
+    fun sendPrompt(rawText: String, media: org.levimc.zaphre.ai.MediaAttachment.Item? = null) {
         val prompt = rawText.trim()
         if (prompt.isEmpty() || _agentBusy.value) return
+        if (_recoveryChecking.value) { notify("Checking for a saved job; please wait"); return }
+        if (_recoveryAvailable.value) { notify("Resume or discard the saved job first"); return }
 
         val cur = _currentSession.value
-        val userMsg = ChatUiMessage(role = ChatRole.USER, text = prompt)
+        val userMsg = ChatUiMessage(role = ChatRole.USER, text = prompt + (media?.let { "\n[Attachment: ${it.name}; media not saved in history]" } ?: ""))
         val newTitle = if (cur.messages.isEmpty()) prompt.take(42) else cur.title
         val prior = cur.messages
         val withUser = cur.copy(
@@ -310,20 +401,52 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             updatedAtMs = System.currentTimeMillis(),
             messages = prior + userMsg
         )
+        startAgent(withUser, prior, prompt, media, null, false)
+    }
+
+    private fun startAgent(withUser: ChatSession, prior: List<ChatUiMessage>, prompt: String,
+        media: org.levimc.zaphre.ai.MediaAttachment.Item?, recovery: org.levimc.zaphre.ai.AgentCheckpoint.Snapshot?, serviceStarted: Boolean) {
+        val cur = _currentSession.value
+        preserveOnCancellation = false
         _currentSession.value = withUser
         _agentBusy.value = true
-        _liveDraft.value = ChatUiMessage(role = ChatRole.ASSISTANT, text = "Starting RE loop...")
+        _agentPaused.value = false
+        appCtx.getSharedPreferences("peta_agent_control", android.content.Context.MODE_PRIVATE).edit().putBoolean("paused", false).commit()
+        _liveDraft.value = ChatUiMessage(role = ChatRole.ASSISTANT, text = if (recovery == null) "Starting RE loop..." else "Restoring saved RE job...")
 
-        agentJob = viewModelScope.launch(Dispatchers.IO) {
-            ChatHistoryStore.saveSession(appCtx, withUser)
-            _sessions.value = ChatHistoryStore.listSessions(appCtx)
+        serviceReady = kotlinx.coroutines.CompletableDeferred()
+        if (serviceStarted) serviceReady?.complete(true) else try {
+            androidx.core.content.ContextCompat.startForegroundService(appCtx, Intent(appCtx, org.levimc.zaphre.ai.AgentForegroundService::class.java))
+        } catch (e: Exception) {
+            _currentSession.value = cur
+            _agentBusy.value = false
+            _liveDraft.value = null
+            serviceReady = null
+            if (recovery != null) _recoveryAvailable.value = true
+            notify("Could not start agent service: ${e.message}")
+            return
+        }
+        val turnJob = agentScope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
             try {
+                if (kotlinx.coroutines.withTimeoutOrNull(15_000) { serviceReady?.await() } != true) throw IllegalStateException("Agent foreground service could not start")
+                if (recovery == null) org.levimc.zaphre.ai.AgentCheckpoint.clear(appCtx)
+                ChatHistoryStore.saveSession(appCtx, withUser)
+                _sessions.value = ChatHistoryStore.listSessions(appCtx)
+                var checkpointSignature = ""
                 val reply = ReAgentEngine.runTurn(
                     context = appCtx,
                     priorMessages = prior,
                     userPrompt = prompt,
+                    media = media,
+                    sessionId = withUser.id,
+                    recovery = recovery,
                     listener = object : ReAgentEngine.StepListener {
-                        override suspend fun confirmSelectedCreate(path: String, directory: Boolean, content: String): Boolean = askCreate(path, directory, content)
+                        override suspend fun confirmWorkspaceWrite(path: String, append: Boolean, content: String): Boolean = askWorkspaceWrite(path, append, content)
+                        override suspend fun confirmAfterInterruption(toolName: String, arguments: String): Boolean = askInterruptedTool(toolName, arguments)
+                        override suspend fun awaitPermission() { _agentPaused.first { !it } }
+                        override suspend fun confirmGitHubCreate(path: String, content: String, message: String, target: String, update: Boolean): Boolean = askGitHub(path, content, message, target, update)
+                        override suspend fun confirmSelectedModify(path: String, deleting: Boolean, content: String, tree: String): Boolean = askModify(path, deleting, content, tree)
+                        override suspend fun confirmSelectedCreate(path: String, directory: Boolean, content: String, tree: String): Boolean = askCreate(path, directory, content, tree)
                         override suspend fun confirmKeySwitch(keyNumber: Int): Boolean = askToSwitchKey(keyNumber)
                         override fun onAssistantDraft(text: String, steps: List<ToolStepRecord>, stepIndex: Int) {
                             _liveDraft.value = ChatUiMessage(
@@ -332,6 +455,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 toolSteps = steps,
                                 modelTag = "Step $stepIndex"
                             )
+                            // Save before and after tool execution; never replay an interrupted tool automatically.
+                            val signature = steps.joinToString("|") { "${it.id}:${it.running}:${it.isError}" }
+                            if (signature.isNotEmpty() && signature != checkpointSignature) {
+                                val checkpoint = ChatUiMessage(role = ChatRole.ASSISTANT,
+                                    text = text + "\n\n*(Checkpoint: if interrupted, verify any running tool before continuing; it will not be replayed automatically.)*",
+                                    toolSteps = steps, modelTag = "Checkpoint · Step $stepIndex")
+                                ChatHistoryStore.saveSession(appCtx, withUser.copy(updatedAtMs = System.currentTimeMillis(), messages = withUser.messages + checkpoint))
+                                checkpointSignature = signature
+                            }
                         }
                     }
                 )
@@ -341,6 +473,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
                 _currentSession.value = completed
                 ChatHistoryStore.saveSession(appCtx, completed)
+                org.levimc.zaphre.ai.AgentCheckpoint.clear(appCtx)
                 backupChat(completed)
                 _sessions.value = ChatHistoryStore.listSessions(appCtx)
                 reloadZaphkielEditors()
@@ -350,23 +483,100 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 val stopMsg = ChatUiMessage(
                     role = ChatRole.ASSISTANT,
                     text = (partial?.text.orEmpty() + "\n\n*(Stopped by user. Background MC stop requested.)*").trim(),
-                    toolSteps = partial?.toolSteps.orEmpty().map { it.copy(running = false) }
+                    toolSteps = partial?.toolSteps.orEmpty()
                 )
                 val completed = withUser.copy(
                     updatedAtMs = System.currentTimeMillis(),
                     messages = withUser.messages + stopMsg
                 )
                 _currentSession.value = completed
-                ChatHistoryStore.saveSession(appCtx, completed)
-                backupChat(completed)
+                if (preserveOnCancellation) {
+                    _recoveryAvailable.value = runCatching { org.levimc.zaphre.ai.AgentCheckpoint.load(appCtx) != null }.getOrDefault(false)
+                    notify("Android stopped the service; review or resume the saved job")
+                } else {
+                    runCatching { ChatHistoryStore.saveSession(appCtx, completed); org.levimc.zaphre.ai.AgentCheckpoint.clear(appCtx); backupChat(completed) }
+                        .onFailure { notify("Could not save stopped chat: ${it.message}") }
+                }
+            } catch (e: Exception) {
+                _recoveryAvailable.value = runCatching { org.levimc.zaphre.ai.AgentCheckpoint.load(appCtx) != null }.getOrDefault(false)
+                notify("Agent could not save or complete: ${e.message}")
             } finally {
                 _liveDraft.value = null
+                _agentPaused.value = false
+                serviceReady = null
+                appCtx.stopService(Intent(appCtx, org.levimc.zaphre.ai.AgentForegroundService::class.java))
                 _agentBusy.value = false
             }
         }
+        agentJob = turnJob
+        turnJob.start()
+    }
+
+    /** Called only by an OS-restarted foreground service. Unsafe checkpoints require user review. */
+    fun discardSavedAgent() {
+        if (_agentBusy.value) return
+        runCatching { org.levimc.zaphre.ai.AgentCheckpoint.clear(appCtx) }.onSuccess { _recoveryAvailable.value = false }
+            .onFailure { notify("Could not discard checkpoint: ${it.message}") }
+    }
+    fun recoverAgentFromService(serviceAlreadyStarted: Boolean = true) {
+        if (_agentBusy.value) { markAgentServiceReady(true); return }
+        if (serviceAlreadyStarted && appCtx.getSharedPreferences("peta_agent_control", android.content.Context.MODE_PRIVATE).getBoolean("paused", false)) {
+            _recoveryAvailable.value = true
+            notify("Saved job is paused; resume it in Chat")
+            appCtx.stopService(Intent(appCtx, org.levimc.zaphre.ai.AgentForegroundService::class.java))
+            return
+        }
+        _agentBusy.value = true
+        _recoveryAvailable.value = false
+        _liveDraft.value = ChatUiMessage(role = ChatRole.ASSISTANT, text = "Checking saved RE job...")
+        val recoveryJob = agentScope.launch(start = kotlinx.coroutines.CoroutineStart.LAZY) {
+            try {
+                val snapshot = org.levimc.zaphre.ai.AgentCheckpoint.load(appCtx) ?: throw IllegalStateException("No recoverable job")
+                val saved = ChatHistoryStore.listSessions(appCtx).firstOrNull { it.id == snapshot.sessionId }
+                    ?: throw IllegalStateException("Saved chat not found")
+                val base = if (saved.messages.lastOrNull()?.modelTag?.startsWith("Checkpoint") == true) saved.copy(messages = saved.messages.dropLast(1)) else saved
+                _sessions.value = ChatHistoryStore.listSessions(appCtx)
+                sessionsInitialized = true
+                if (snapshot.state == "completed") {
+                    val result = snapshot.result ?: throw IllegalStateException("Saved result missing")
+                    val completed = if (saved.messages.any { it.id == result.id }) saved else base.copy(messages = base.messages + result, updatedAtMs = System.currentTimeMillis())
+                    ChatHistoryStore.saveSession(appCtx, completed)
+                    org.levimc.zaphre.ai.AgentCheckpoint.clear(appCtx)
+                    _currentSession.value = completed
+                    _sessions.value = ChatHistoryStore.listSessions(appCtx)
+                    appCtx.stopService(Intent(appCtx, org.levimc.zaphre.ai.AgentForegroundService::class.java))
+                    _agentBusy.value = false; _liveDraft.value = null
+                } else if (snapshot.state == "safe") {
+                    val settings = AiSettingsStore.load(appCtx)
+                    if (settings.providerId != snapshot.providerId || settings.baseUrl != snapshot.baseUrl || settings.model != snapshot.model || settings.providerId == "local_builtin") throw IllegalStateException("Provider/model changed or on-device model needs manual reload")
+                    val prompt = (snapshot.history.lastOrNull { it is AgentTurnItem.User } as? AgentTurnItem.User)?.text ?: "Continue"
+                    startAgent(base, emptyList(), prompt, null, snapshot, serviceAlreadyStarted)
+                } else {
+                    val old = saved.messages.lastOrNull()?.takeIf { it.modelTag.startsWith("Checkpoint") }
+                    val uncertain = ToolStepRecord(toolName = "Interrupted tool batch", argsSummary = "Outcome unknown; review before retry", running = true)
+                    val marker = (old ?: ChatUiMessage(role = ChatRole.ASSISTANT, text = "A tool batch was interrupted. Review outcomes before continuing.", modelTag = "Checkpoint · interrupted"))
+                    val marked = marker.copy(toolSteps = if (marker.toolSteps.any { it.running }) marker.toolSteps else marker.toolSteps + uncertain)
+                    val updated = base.copy(messages = base.messages + marked, updatedAtMs = System.currentTimeMillis())
+                    ChatHistoryStore.saveSession(appCtx, updated)
+                    org.levimc.zaphre.ai.AgentCheckpoint.clear(appCtx)
+                    _currentSession.value = updated; _sessions.value = ChatHistoryStore.listSessions(appCtx)
+                    appCtx.stopService(Intent(appCtx, org.levimc.zaphre.ai.AgentForegroundService::class.java))
+                    _agentBusy.value = false; _liveDraft.value = null
+                    notify("Interrupted tool needs review; not replayed")
+                }
+            } catch (e: Exception) {
+                appCtx.stopService(Intent(appCtx, org.levimc.zaphre.ai.AgentForegroundService::class.java))
+                _agentBusy.value = false; _liveDraft.value = null
+                _recoveryAvailable.value = true
+                notify("Saved job needs manual recovery: ${e.message}")
+            }
+        }
+        agentJob = recoveryJob
+        recoveryJob.start()
     }
 
     fun stopAgentLoop() {
+        preserveOnCancellation = false
         agentJob?.cancel()
         LocalLlama.cancelInference()
         viewModelScope.launch(Dispatchers.IO) {
@@ -683,6 +893,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun importLegacyAiSettings(uri: Uri) {
+        if (_agentBusy.value) { notify("Stop the active response before importing settings"); return }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { org.levimc.zaphre.ai.LegacySettingsImport.import(appCtx, uri) }.onSuccess { count ->
+                _aiSettings.value = AiSettingsStore.load(appCtx)
+                notify("Imported settings for $count provider(s); existing provider settings were kept")
+            }.onFailure { notify("Settings import failed. Select a valid v3 settings XML file.") }
+        }
+    }
+
+    fun importChatArchive(uri: Uri) {
+        if (_agentBusy.value) { notify("Stop the active response before importing chats"); return }
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { org.levimc.zaphre.ai.ChatArchive.import(appCtx, uri) }.onSuccess { count ->
+                _sessions.value = ChatHistoryStore.listSessions(appCtx)
+                notify("Imported $count chat(s) as new copies")
+            }.onFailure { notify("Chat import failed: ${it.message}") }
+        }
+    }
+    fun exportChatArchive(uri: Uri) {
+        viewModelScope.launch(Dispatchers.IO) {
+            runCatching { org.levimc.zaphre.ai.ChatArchive.export(appCtx, uri, ChatHistoryStore.listSessions(appCtx)) }
+                .onSuccess { notify("Chat archive saved; API keys are not included") }
+                .onFailure { notify("Chat archive failed: ${it.message}") }
+        }
+    }
+
     fun exportChat(uri: Uri, session: ChatSession) {
         viewModelScope.launch(Dispatchers.IO) {
             try {
@@ -785,7 +1022,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private val _customProfiles = MutableStateFlow(AiSettingsStore.profiles(appCtx))
+    val customProfiles = _customProfiles.asStateFlow()
+    fun createAiProfile(name: String) {
+        runCatching { AiSettingsStore.createProfile(appCtx, name) }.onSuccess {
+            _customProfiles.value = AiSettingsStore.profiles(appCtx)
+            switchAiProvider(it.id)
+        }.onFailure { notify("Could not create profile: ${it.message}") }
+    }
+    fun renameAiProfile(id: String, name: String) {
+        runCatching { AiSettingsStore.renameProfile(appCtx, id, name) }.onSuccess {
+            _customProfiles.value = AiSettingsStore.profiles(appCtx)
+            _aiSettings.value = AiSettingsStore.load(appCtx)
+        }.onFailure { notify("Could not rename profile: ${it.message}") }
+    }
+
     fun switchAiProvider(providerId: String) {
+        if (_agentBusy.value) { notify("Wait for the current response before switching providers"); return }
         _fetchedModels.value = emptyList()
         _aiTestStatus.value = null
         _aiSettings.value = AiSettingsStore.selectProvider(appCtx, providerId)

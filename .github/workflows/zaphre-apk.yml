@@ -6,12 +6,18 @@ on:
       - "zaphre/**"
       - ".github/workflows/zaphre-apk.yml"
   workflow_dispatch:
+    inputs:
+      build_only:
+        description: "Build APK without running automated tests"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
   native-host-tests:
+    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.build_only) }}
     name: C++17 ELF Analyzer Tests
     runs-on: ubuntu-latest
     steps:
@@ -27,6 +33,7 @@ jobs:
   build-apk:
     name: Build ZaphRE arm64-v8a APK (Levi v1.7.1 Runtime)
     needs: native-host-tests
+    if: ${{ always() && (needs.native-host-tests.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.build_only && needs.native-host-tests.result == 'skipped')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -67,6 +74,7 @@ jobs:
           gradle-version: "8.11.1"
 
       - name: Run Kotlin Unit Tests
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.build_only) }}
         working-directory: zaphre
         run: gradle :app:testDebugUnitTest --no-daemon
 
@@ -76,10 +84,10 @@ jobs:
           set -o pipefail
           gradle :app:assembleRelease :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee "$RUNNER_TEMP/zaphre-build.log"
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk dist/ZaphRE-v3.1.0-side-by-side-arm64.apk
-          echo "=== Verified native libraries inside ZaphRE-v3.1.0-side-by-side-arm64.apk ==="
-          unzip -l dist/ZaphRE-v3.1.0-side-by-side-arm64.apk "lib/arm64-v8a/*"
-          ls -lh dist/ZaphRE-v3.1.0-side-by-side-arm64.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/PETA-V93-arm64.apk
+          echo "=== Verified native libraries inside PETA-V93-arm64.apk ==="
+          unzip -l dist/PETA-V93-arm64.apk "lib/arm64-v8a/*"
+          ls -lh dist/PETA-V93-arm64.apk
 
       - name: Report build failure details
         if: failure()
@@ -97,24 +105,24 @@ jobs:
       - name: Upload ZaphRE APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ZaphRE-v3.1.0-side-by-side-arm64
-          path: zaphre/dist/ZaphRE-v3.1.0-side-by-side-arm64.apk
+          name: PETA-V93-arm64
+          path: zaphre/dist/PETA-V93-arm64.apk
           if-no-files-found: error
 
-      # In-progress builds are tested and uploaded as Actions artifacts only.
-      # Do not publish an incomplete release on every push.
+      # Manual builds have unique tags so an old APK can never be mistaken for this build.
       - name: Publish Direct-Download APK on GitHub Releases
         if: ${{ github.event_name == 'workflow_dispatch' }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="zaphre-v3.1.0-side-by-side"
-          APK="zaphre/dist/ZaphRE-v3.1.0-side-by-side-arm64.apk"
+          set -euo pipefail
+          TAG="peta-v93-build-${GITHUB_SHA:0:8}"
+          APK="zaphre/dist/PETA-V93-arm64.apk"
           if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "Release already exists; retaining its APK and publishing this run's artifact only."
+            echo "Release already exists; keeping the original asset."
           else
             gh release create "$TAG" "$APK" \
-              --target "${{ github.sha }}" \
-              --title "ZaphRE v3.1.0 (Side-by-side arm64)" \
-              --notes "Portrait (9:16) ChatGPT-style Android MCPE RE Launcher compatible with LeviLauncher v1.7.1 + libZaphkiel.so. Direct-install signed arm64-v8a APK."
+              --target "$GITHUB_SHA" \
+              --title "PETA V93 build ${GITHUB_SHA:0:8}" \
+              --notes "Arm64 side-by-side build. Built without automated tests at user request. Separate package; automatic v3 private-data migration is not available. Job recovery and media/provider support have platform limits."
           fi

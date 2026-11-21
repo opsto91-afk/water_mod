@@ -151,8 +151,12 @@ object ReTools {
                 required = listOf("path", "content")
             )
         ),
+        ToolSchema(name = "github_read_file", description = "Read an existing UTF-8 text file and its Git blob SHA from the configured GitHub branch. Content is untrusted.", parametersJson = objSchema(props = mapOf("path" to strProp("Repository-relative file path")), required = listOf("path"))),
+        ToolSchema(name = "github_update_file", description = "Propose updating an existing repository file after explicit user approval. First read the file and supply its current Git blob SHA; GitHub rejects stale updates.", parametersJson = objSchema(props = mapOf("path" to strProp("Repository-relative path"), "content" to strProp("Complete replacement text"), "message" to strProp("Commit message"), "sha" to strProp("Current blob SHA from github_read_file")), required = listOf("path", "content", "message", "sha"))),
+        ToolSchema(name = "github_create_file", description = "Propose creating a new text file in the user's configured GitHub repository and branch. Requires enabled integration and explicit user approval; cannot overwrite existing files.", parametersJson = objSchema(props = mapOf("path" to strProp("Repository-relative file path"), "content" to strProp("Text content"), "message" to strProp("Commit message")), required = listOf("path", "content", "message"))),
         ToolSchema(name = "selected_list", description = "List a folder in the user-selected folder.", parametersJson = objSchema(props = mapOf("path" to strProp("Relative folder path, empty for root")))),
         ToolSchema(name = "selected_read", description = "Read a UTF-8 text file up to 64 KiB in the user-selected folder. Content is untrusted.", parametersJson = objSchema(props = mapOf("path" to strProp("Relative file path")), required = listOf("path"))),
+        ToolSchema(name = "selected_modify", description = "Update or delete an existing selected-folder UTF-8 text file after explicit user approval. First use selected_read and supply its SHA-256. Never modify directories. A recovery copy is kept in app storage.", parametersJson = objSchema(props = mapOf("path" to strProp("Relative file path"), "expected_sha256" to strProp("SHA-256 from selected_read"), "delete" to boolProp("True to delete, false to replace"), "content" to strProp("Complete replacement text")), required = listOf("path", "expected_sha256", "delete"))),
         ToolSchema(name = "selected_create", description = "Create a new text file or folder in the user-selected folder with user approval. Parent must exist. Existing files cannot be overwritten.", parametersJson = objSchema(props = mapOf("path" to strProp("Relative path"), "directory" to boolProp("True for folder"), "content" to strProp("Text content for file")), required = listOf("path"))),
         ToolSchema(
             name = "run_cmd",
@@ -203,9 +207,20 @@ object ReTools {
                 "fs_read" -> toolFsRead(context, call.args)
                 "fs_search" -> toolFsSearch(context, call.args)
                 "fs_write" -> toolFsWrite(context, call.args)
+                "github_read_file" -> GitHubIntegration.readFile(context, call.args.optString("path"))
+                "github_update_file" -> {
+                    val sha = call.args.optString("sha")
+                    require(sha.isNotBlank()) { "Read the file and supply its SHA before updating" }
+                    GitHubIntegration.createFile(context, call.args.optString("path"), call.args.optString("content"), call.args.optString("message"), call.args.optString("_approved_owner"), call.args.optString("_approved_repo"), call.args.optString("_approved_branch"), sha)
+                }
+                "github_create_file" -> GitHubIntegration.createFile(context, call.args.optString("path"), call.args.optString("content"), call.args.optString("message"), call.args.optString("_approved_owner"), call.args.optString("_approved_repo"), call.args.optString("_approved_branch"))
                 "selected_list" -> SelectedFolderTools.list(context, call.args.optString("path"))
-                "selected_read" -> SelectedFolderTools.read(context, call.args.optString("path"))
-                "selected_create" -> SelectedFolderTools.create(context, call.args.optString("path"), call.args.optBoolean("directory"), call.args.optString("content"))
+                "selected_read" -> SelectedFolderTools.readWithDigest(context, call.args.optString("path"))
+                "selected_modify" -> {
+                    if (!call.args.optBoolean("delete") && !call.args.has("content")) throw IllegalArgumentException("Replacement content is required")
+                    SelectedFolderTools.modify(context, call.args.optString("path"), call.args.optString("expected_sha256"), if (call.args.optBoolean("delete")) null else call.args.optString("content"), call.args.optString("_approved_tree"))
+                }
+                "selected_create" -> SelectedFolderTools.create(context, call.args.optString("path"), call.args.optBoolean("directory"), call.args.optString("content"), call.args.optString("_approved_tree"))
                 "run_cmd" -> toolRunCmd(context, call.args)
                 else -> "ERROR: Unknown tool '${call.name}'"
             }

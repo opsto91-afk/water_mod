@@ -94,6 +94,11 @@ fun FilesScreen(
     val entries by vm.fileEntries.collectAsState()
     val wsPath by vm.workspacePath.collectAsState()
 
+    var selectedFolderMode by remember { mutableStateOf(false) }
+    if (selectedFolderMode) {
+        SelectedFolderScreen(onClose = { selectedFolderMode = false }, onPick = onPickBackupFolder)
+        return
+    }
     var categoryFilter by rememberSaveable { mutableStateOf("All") }
     var createDialogFolder by remember { mutableStateOf<Boolean?>(null) }
     var renameEntry by remember { mutableStateOf<org.levimc.zaphre.files.WorkspaceEntry?>(null) }
@@ -198,6 +203,7 @@ fun FilesScreen(
         Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(onClick = onPickBackupFolder) { Text("Choose backup folder") }
             TextButton(onClick = { vm.clearBackupFolder() }) { Text("Clear selection") }
+            TextButton(onClick = { selectedFolderMode = true }) { Text("Browse") }
         }
         Text("Selected folder receives completed chat backups and saved findings. RE workspace remains separate.", color = ZaphSubtext, fontSize = 11.sp, modifier = Modifier.padding(horizontal = 12.dp))
 

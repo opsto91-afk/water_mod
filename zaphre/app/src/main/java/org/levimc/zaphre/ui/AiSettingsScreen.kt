@@ -6,6 +6,8 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.platform.LocalContext
 import kotlinx.coroutines.launch
 import org.levimc.zaphre.ai.LocalLlama
+import org.levimc.zaphre.ai.GitHubIntegration
+import org.levimc.zaphre.ai.AiSettingsStore
 import org.levimc.zaphre.ai.WebSearch
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -80,6 +82,8 @@ import org.levimc.zaphre.ui.theme.ZaphText
 @Composable
 fun AiSettingsScreen(vm: MainViewModel) {
     val saved by vm.aiSettings.collectAsState()
+    val customProfiles by vm.customProfiles.collectAsState()
+    var profileName by remember { mutableStateOf("") }
     val fetchedModels by vm.fetchedModels.collectAsState()
     val testStatus by vm.aiTestStatus.collectAsState()
     val clipboard = LocalClipboardManager.current
@@ -87,6 +91,15 @@ fun AiSettingsScreen(vm: MainViewModel) {
     val scope = rememberCoroutineScope()
     val localModels by LocalLlama.models.collectAsState()
     val localStatus by LocalLlama.status.collectAsState()
+    var showLegacyImport by remember { mutableStateOf(false) }
+    val legacySettingsPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri != null) vm.importLegacyAiSettings(uri)
+    }
+    if (showLegacyImport) androidx.compose.material3.AlertDialog(
+        onDismissRequest = { showLegacyImport = false }, title = { Text("Import v3 settings copy?") },
+        text = { Text("Select an accessible copy of v3 zaphre_ai_settings.xml. Existing provider settings are not overwritten. The old app's private data cannot be accessed automatically. This file can contain API keys; keep it private.") },
+        confirmButton = { TextButton(onClick = { showLegacyImport = false; legacySettingsPicker.launch(arrayOf("text/xml", "application/xml", "*/*")) }) { Text("Choose file") } },
+        dismissButton = { TextButton(onClick = { showLegacyImport = false }) { Text("Cancel") } })
     val importLauncher = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
         if (uri != null) scope.launch { runCatching { LocalLlama.importModel(context, uri) }.onFailure { LocalLlama.status.value = "Import failed: ${it.message}" } }
     }
@@ -96,6 +109,9 @@ fun AiSettingsScreen(vm: MainViewModel) {
     var apiKey by remember { mutableStateOf(saved.apiKey) }
     var extraKeys by remember { mutableStateOf(saved.additionalKeys) }
     var newKey by remember { mutableStateOf("") }
+    var keyRenameIndex by remember { mutableStateOf<Int?>(null) }
+    var keyNewName by remember { mutableStateOf("") }
+    var keyLabelVersion by remember { mutableIntStateOf(0) }
     var autoSwitchKeys by remember { mutableStateOf(saved.autoSwitchKeys) }
     var askSwitchKeys by remember { mutableStateOf(saved.askSwitchKeys) }
     var model by remember { mutableStateOf(saved.model) }
@@ -106,6 +122,13 @@ fun AiSettingsScreen(vm: MainViewModel) {
     var customPrompt by remember { mutableStateOf(saved.customPrompt) }
     var showKey by remember { mutableStateOf(false) }
     var webSearchEnabled by remember { mutableStateOf(WebSearch.enabled(context)) }
+    val initialGitHub = remember { GitHubIntegration.config(context) }
+    var ghEnabled by remember { mutableStateOf(initialGitHub.enabled) }
+    var ghOwner by remember { mutableStateOf(initialGitHub.owner) }
+    var ghRepo by remember { mutableStateOf(initialGitHub.repo) }
+    var ghBranch by remember { mutableStateOf(initialGitHub.branch) }
+    var ghToken by remember { mutableStateOf("") }
+    var ghStatus by remember { mutableStateOf("") }
 
     LaunchedEffect(saved) {
         baseUrl = saved.baseUrl
@@ -168,6 +191,36 @@ fun AiSettingsScreen(vm: MainViewModel) {
             }
         }
 
+        item {
+            Surface(shape = RoundedCornerShape(14.dp), color = ZaphSurface) {
+                Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("GitHub integration", color = ZaphText, fontWeight = FontWeight.Bold)
+                    Text("Off by default. AI can propose creating or updating text files on the configured branch; every commit needs approval and updates require the current Git SHA.", color = ZaphSubtext, fontSize = 11.sp)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("Enable GitHub tool", modifier = Modifier.weight(1f), color = ZaphText)
+                        Switch(checked = ghEnabled, onCheckedChange = { value ->
+                            ghEnabled = value
+                            if (!value) runCatching { GitHubIntegration.save(context, false, ghOwner, ghRepo, ghBranch, "") }.onFailure { ghStatus = "Could not disable: ${it.message}" }
+                        })
+                    }
+                    OutlinedTextField(value = ghOwner, onValueChange = { ghOwner = it }, label = { Text("Owner") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(value = ghRepo, onValueChange = { ghRepo = it }, label = { Text("Repository") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(value = ghBranch, onValueChange = { ghBranch = it }, label = { Text("Branch") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedTextField(value = ghToken, onValueChange = { ghToken = it }, label = { Text("GitHub credential (leave blank to keep saved)") }, visualTransformation = PasswordVisualTransformation(), singleLine = true, modifier = Modifier.fillMaxWidth())
+                    OutlinedButton(onClick = {
+                        runCatching { GitHubIntegration.save(context, ghEnabled, ghOwner, ghRepo, ghBranch, ghToken) }
+                            .onSuccess { ghStatus = "GitHub settings saved"; ghToken = "" }
+                            .onFailure { ghStatus = "Could not save: ${it.message}" }
+                    }) { Text("Save GitHub settings") }
+                    if (ghStatus.isNotBlank()) Text(ghStatus, color = ZaphSubtext, fontSize = 11.sp)
+                }
+            }
+        }
+
+        item {
+            OutlinedButton(onClick = { showLegacyImport = true }, modifier = Modifier.fillMaxWidth()) { Text("Import v3 AI settings copy") }
+        }
+
         // Online Providers
         item {
             Surface(
@@ -196,6 +249,21 @@ fun AiSettingsScreen(vm: MainViewModel) {
                             )
                         }
                     }
+
+                    Text("Named custom OpenAI-compatible profiles", color = ZaphText, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        customProfiles.forEach { profile ->
+                            FilterChip(selected = saved.providerId == profile.id, onClick = { vm.switchAiProvider(profile.id) }, label = { Text(profile.name) })
+                        }
+                    }
+                    OutlinedTextField(value = profileName, onValueChange = { profileName = it.take(80) }, label = { Text("Profile name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        OutlinedButton(onClick = { vm.createAiProfile(profileName); profileName = "" }, enabled = profileName.isNotBlank()) { Text("Add profile") }
+                        if (saved.providerId.startsWith("profile_")) {
+                            OutlinedButton(onClick = { vm.renameAiProfile(saved.providerId, profileName); profileName = "" }, enabled = profileName.isNotBlank()) { Text("Rename selected") }
+                        }
+                    }
+                    Text("Save each profile's URL, model and keys below. Save changes before switching.", color = ZaphSubtext, fontSize = 11.sp)
 
                     Text("Local / On-Device Models", color = ZaphGreen, fontWeight = FontWeight.SemiBold, fontSize = 13.sp)
                     Row(
@@ -256,11 +324,23 @@ fun AiSettingsScreen(vm: MainViewModel) {
                     )
 
                     if (saved.additionalKeysUnavailable) Text("Additional keys cannot be decrypted on this device. Existing encrypted data was preserved; settings cannot be saved until resolved.", color = ZaphRed, fontSize = 12.sp)
-                    Text("Additional keys: ${extraKeys.size} (same provider and endpoint)", color = ZaphSubtext, fontSize = 12.sp)
-                    extraKeys.forEachIndexed { index, _ ->
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            Text("Key ${index + 2} · saved", modifier = Modifier.weight(1f), color = ZaphSubtext)
-                            TextButton(onClick = { extraKeys = extraKeys.filterIndexed { i, _ -> i != index } }) { Text("Remove") }
+                    Text("Key sets (same provider and endpoint)", color = ZaphSubtext, fontSize = 12.sp)
+                    val allKeys = listOf(apiKey) + extraKeys
+                    allKeys.forEachIndexed { index, key ->
+                        if (key.isNotBlank()) {
+                            val label = remember(saved.providerId, key, keyLabelVersion) { AiSettingsStore.keyLabel(context, saved.providerId, key, "Key ${index + 1}") }
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Text(label, modifier = Modifier.weight(1f), color = ZaphSubtext)
+                                TextButton(onClick = { keyRenameIndex = index; keyNewName = label }) { Text("Rename") }
+                                if (index > 0) TextButton(onClick = { extraKeys = extraKeys.filterIndexed { i, _ -> i != index - 1 }; keyRenameIndex = null }) { Text("Remove") }
+                            }
+                            if (keyRenameIndex == index) {
+                                OutlinedTextField(value = keyNewName, onValueChange = { keyNewName = it.take(80) }, label = { Text("Key name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                                TextButton(onClick = {
+                                    runCatching { AiSettingsStore.renameKey(context, saved.providerId, key, keyNewName) }
+                                        .onSuccess { keyLabelVersion++; keyRenameIndex = null }
+                                }, enabled = keyNewName.isNotBlank()) { Text("Save name") }
+                            }
                         }
                     }
                     OutlinedTextField(

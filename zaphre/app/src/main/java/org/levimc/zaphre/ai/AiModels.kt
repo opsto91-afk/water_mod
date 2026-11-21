@@ -182,6 +182,7 @@ val BUILTIN_PROVIDERS: List<AiProviderPreset> = listOf(
 
 data class ActiveAiSettings(
     val providerId: String = "gemini",
+    val profileName: String = "",
     val protocol: ApiProtocol = ApiProtocol.GEMINI_NATIVE,
     val baseUrl: String = "https://generativelanguage.googleapis.com/v1beta",
     val apiKey: String = "",
@@ -197,7 +198,9 @@ data class ActiveAiSettings(
     val customPrompt: String = ""
 ) {
     val preset: AiProviderPreset
-        get() = BUILTIN_PROVIDERS.firstOrNull { it.id == providerId } ?: BUILTIN_PROVIDERS.first()
+        get() = BUILTIN_PROVIDERS.firstOrNull { it.id == providerId }
+            ?: if (providerId.startsWith("profile_")) AiProviderPreset(providerId, profileName.ifBlank { "Custom profile" }, "Online", ApiProtocol.OPENAI_COMPAT, "", "", emptyList())
+            else BUILTIN_PROVIDERS.first()
 }
 
 object AiSettingsStore {
@@ -206,7 +209,9 @@ object AiSettingsStore {
     fun load(context: Context): ActiveAiSettings {
         val p = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val pid = p.getString("active_provider", "gemini") ?: "gemini"
-        val preset = BUILTIN_PROVIDERS.firstOrNull { it.id == pid } ?: BUILTIN_PROVIDERS.first()
+        val profile = profiles(context).firstOrNull { it.id == pid }
+        val preset = BUILTIN_PROVIDERS.firstOrNull { it.id == pid }
+            ?: if (profile != null) AiProviderPreset(profile.id, profile.name, "Online", ApiProtocol.OPENAI_COMPAT, "", "", emptyList()) else BUILTIN_PROVIDERS.first()
         val baseUrl = p.getString("url_$pid", preset.baseUrl)?.ifBlank { preset.baseUrl } ?: preset.baseUrl
         val key = p.getString("key_$pid", "") ?: ""
         val keyLoad = runCatching { ExtraKeyStore.load(context, pid) }
@@ -216,6 +221,7 @@ object AiSettingsStore {
 
         return ActiveAiSettings(
             providerId = preset.id,
+            profileName = profile?.name ?: "",
             protocol = preset.protocol,
             baseUrl = baseUrl.trim().trimEnd('/'),
             apiKey = key.trim(),
@@ -256,6 +262,48 @@ object AiSettingsStore {
             .putString("active_provider", providerId)
             .apply()
         return load(context)
+    }
+
+    data class Profile(val id: String, val name: String)
+
+    fun profiles(context: Context): List<Profile> {
+        val raw = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("custom_profiles", "[]") ?: "[]"
+        return runCatching {
+            val array = JSONArray(raw)
+            (0 until array.length()).map { array.getJSONObject(it) }.map { Profile(it.getString("id"), it.getString("name")) }
+                .filter { it.id.startsWith("profile_") && it.name.isNotBlank() }
+        }.getOrDefault(emptyList())
+    }
+
+    private fun saveProfiles(context: Context, profiles: List<Profile>) {
+        val array = JSONArray()
+        profiles.forEach { array.put(JSONObject().put("id", it.id).put("name", it.name)) }
+        check(context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("custom_profiles", array.toString()).commit())
+    }
+    fun createProfile(context: Context, name: String): Profile {
+        val clean = name.trim().take(80)
+        require(clean.isNotBlank()) { "Enter a profile name" }
+        val all = profiles(context)
+        require(all.size < 40) { "Profile limit reached" }
+        val profile = Profile("profile_" + UUID.randomUUID().toString(), clean)
+        saveProfiles(context, all + profile)
+        return profile
+    }
+    fun renameProfile(context: Context, id: String, name: String) {
+        val clean = name.trim().take(80)
+        require(clean.isNotBlank()) { "Enter a profile name" }
+        val all = profiles(context)
+        require(all.any { it.id == id }) { "Profile not found" }
+        saveProfiles(context, all.map { if (it.id == id) it.copy(name = clean) else it })
+    }
+
+    private fun labelId(providerId: String, key: String): String = java.security.MessageDigest.getInstance("SHA-256")
+        .digest((providerId + "|" + key).toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it) }
+    fun keyLabel(context: Context, providerId: String, key: String, fallback: String): String =
+        context.getSharedPreferences("peta_key_labels", Context.MODE_PRIVATE).getString(labelId(providerId, key), fallback) ?: fallback
+    fun renameKey(context: Context, providerId: String, key: String, name: String) {
+        require(key.isNotBlank() && name.isNotBlank()) { "Save the key and enter a name" }
+        check(context.getSharedPreferences("peta_key_labels", Context.MODE_PRIVATE).edit().putString(labelId(providerId, key), name.trim().take(80)).commit())
     }
 
     fun hasKeySaved(context: Context, providerId: String): Boolean {
@@ -305,6 +353,7 @@ data class ChatUiMessage(
                     put("argsSummary", s.argsSummary)
                     put("output", s.output.take(4000))
                     put("isError", s.isError)
+                    put("running", s.running)
                     put("durationMs", s.durationMs)
                 })
             }
@@ -322,7 +371,7 @@ data class ChatUiMessage(
                         toolName = s.optString("toolName"),
                         argsSummary = s.optString("argsSummary"),
                         output = s.optString("output"),
-                        running = false,
+                        running = s.optBoolean("running", false),
                         isError = s.optBoolean("isError", false),
                         durationMs = s.optLong("durationMs", 0L)
                     )
@@ -351,21 +400,31 @@ object ChatHistoryStore {
     private fun dir(context: Context) = File(context.filesDir, "chat_sessions").apply { mkdirs() }
 
     fun listSessions(context: Context): List<ChatSession> {
-        return dir(context).listFiles().orEmpty()
-            .filter { it.isFile && it.name.endsWith(".json") }
+        val directory = dir(context)
+        return directory.listFiles().orEmpty()
+            .filter { it.isFile && (it.name.endsWith(".json") || it.name.endsWith(".json.bak")) }
+            .map { File(directory, it.name.removeSuffix(".bak")) }
+            .distinctBy { it.name }
             .mapNotNull { f -> runCatching { readSessionFile(f) }.getOrNull() }
             .sortedByDescending { it.updatedAtMs }
     }
 
+    @Synchronized
     fun saveSession(context: Context, session: ChatSession) {
-        runCatching {
-            val o = JSONObject().apply {
-                put("id", session.id)
-                put("title", session.title)
-                put("updatedAtMs", session.updatedAtMs)
-                put("messages", JSONArray(session.messages.map { it.toJson() }))
-            }
-            File(dir(context), "${session.id}.json").writeText(o.toString())
+        val o = JSONObject().apply {
+            put("id", session.id)
+            put("title", session.title)
+            put("updatedAtMs", session.updatedAtMs)
+            put("messages", JSONArray(session.messages.map { it.toJson() }))
+        }
+        val atomic = android.util.AtomicFile(File(dir(context), "${session.id}.json"))
+        val stream = atomic.startWrite()
+        try {
+            stream.write(o.toString().toByteArray(Charsets.UTF_8))
+            atomic.finishWrite(stream)
+        } catch (t: Throwable) {
+            atomic.failWrite(stream)
+            throw t
         }
     }
 
@@ -374,7 +433,7 @@ object ChatHistoryStore {
     }
 
     private fun readSessionFile(file: File): ChatSession {
-        val o = JSONObject(file.readText())
+        val o = JSONObject(android.util.AtomicFile(file).openRead().bufferedReader(Charsets.UTF_8).use { it.readText() })
         val arr = o.optJSONArray("messages")
         val msgs = if (arr != null) List(arr.length()) { ChatUiMessage.fromJson(arr.getJSONObject(it)) } else emptyList()
         return ChatSession(

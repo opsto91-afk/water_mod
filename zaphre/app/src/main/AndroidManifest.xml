@@ -58,6 +58,12 @@
             </intent-filter>
         </activity>
 
+        <service
+            android:name=".ai.AgentForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
+
         <!-- Isolated Background Process (:mcre) hosting Minecraft .so runtime + libZaphkiel.so -->
         <service
             android:name=".mc.McBgRunnerService"
