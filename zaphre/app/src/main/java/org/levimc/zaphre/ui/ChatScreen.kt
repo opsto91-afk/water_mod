@@ -1,5 +1,7 @@
 package org.levimc.zaphre.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -33,6 +35,7 @@ import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.ErrorOutline
+import androidx.compose.material.icons.filled.FileDownload
 import androidx.compose.material.icons.filled.ExpandLess
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.Menu
@@ -47,6 +50,7 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
@@ -132,6 +136,12 @@ fun ChatScreen(
     val hasAiReady = if (aiSettings.providerId == "local_builtin") localLoaded != null else aiSettings.preset.isLocal || aiSettings.apiKey.isNotBlank()
 
     var inputText by rememberSaveable { mutableStateOf("") }
+    var exportSnapshot by remember { mutableStateOf<org.levimc.zaphre.ai.ChatSession?>(null) }
+    val exportPicker = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("text/plain")) { uri ->
+        val snapshot = exportSnapshot
+        if (uri != null && snapshot != null) vm.exportChat(uri, snapshot)
+        exportSnapshot = null
+    }
     val drawerState = rememberDrawerState(DrawerValue.Closed)
     val scope = rememberCoroutineScope()
     val listState = rememberLazyListState()
@@ -251,7 +261,9 @@ fun ChatScreen(
                 onOpenDrawer = { scope.launch { drawerState.open() } },
                 onClickModel = { onJumpToTab(MainTab.AI) },
                 onClickBgPill = { onJumpToTab(MainTab.BG_RUN) },
-                onNewChat = { vm.newChatSession() }
+                onNewChat = { vm.newChatSession() },
+                onExport = { exportSnapshot = currentSession; exportPicker.launch("ZaphRE-chat.txt") },
+                canExport = currentSession.messages.isNotEmpty() && !agentBusy
             )
             HorizontalDivider(color = ZaphBorder.copy(alpha = 0.6f))
 
@@ -278,11 +290,11 @@ fun ChatScreen(
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
                     items(currentSession.messages, key = { it.id }) { msg ->
-                        ChatMessageBubble(msg = msg, isLive = false)
+                        ChatMessageBubble(msg = msg, isLive = false, onSaveFinding = { vm.saveFinding(msg, currentSession) })
                     }
                     liveDraft?.let { draft ->
                         item(key = "live_draft") {
-                            ChatMessageBubble(msg = draft, isLive = true)
+                            ChatMessageBubble(msg = draft, isLive = true, onSaveFinding = {})
                         }
                     }
                 }
@@ -311,7 +323,9 @@ private fun ChatTopBar(
     onOpenDrawer: () -> Unit,
     onClickModel: () -> Unit,
     onClickBgPill: () -> Unit,
-    onNewChat: () -> Unit
+    onNewChat: () -> Unit,
+    onExport: () -> Unit,
+    canExport: Boolean
 ) {
     Row(
         modifier = Modifier
@@ -321,6 +335,10 @@ private fun ChatTopBar(
     ) {
         IconButton(onClick = onOpenDrawer) {
             Icon(Icons.Default.Menu, contentDescription = "Chats", tint = ZaphText)
+        }
+
+        IconButton(onClick = onExport, enabled = canExport) {
+            Icon(Icons.Default.FileDownload, contentDescription = "Export chat", tint = if (canExport) ZaphText else ZaphSubtext)
         }
 
         // Active AI model pill
@@ -493,7 +511,7 @@ private fun ReadinessChip(ok: Boolean, text: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun ChatMessageBubble(msg: ChatUiMessage, isLive: Boolean) {
+private fun ChatMessageBubble(msg: ChatUiMessage, isLive: Boolean, onSaveFinding: () -> Unit) {
     val clipboard = LocalClipboardManager.current
 
     if (msg.role == ChatRole.USER) {
@@ -539,16 +557,6 @@ private fun ChatMessageBubble(msg: ChatUiMessage, isLive: Boolean) {
                     )
                 }
             }
-            if (!isLive && msg.text.isNotBlank()) {
-                Icon(
-                    imageVector = Icons.Default.ContentCopy,
-                    contentDescription = "Copy reply",
-                    tint = ZaphSubtext,
-                    modifier = Modifier
-                        .size(15.dp)
-                        .clickable { clipboard.setText(AnnotatedString(msg.text)) }
-                )
-            }
         }
 
         // Collapsible tool call steps (just like Claude Code / Ghidra MCP)
@@ -563,6 +571,16 @@ private fun ChatMessageBubble(msg: ChatUiMessage, isLive: Boolean) {
         // Formatted body with fenced ```code``` blocks and 1-tap copy buttons
         if (msg.text.isNotBlank()) {
             RichMessageContent(msg.text)
+        }
+        if (!isLive && msg.text.isNotBlank()) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { clipboard.setText(AnnotatedString(msg.text)) }) {
+                    Icon(Icons.Default.ContentCopy, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(Modifier.width(4.dp))
+                    Text("Copy")
+                }
+                TextButton(onClick = onSaveFinding) { Text("Save finding") }
+            }
         }
     }
 }

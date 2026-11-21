@@ -76,10 +76,10 @@ jobs:
           set -o pipefail
           gradle :app:assembleRelease :app:assembleDebug --no-daemon --stacktrace 2>&1 | tee "$RUNNER_TEMP/zaphre-build.log"
           mkdir -p dist
-          cp app/build/outputs/apk/release/app-release.apk dist/ZaphRE-v3.0.0-side-by-side-arm64.apk
-          echo "=== Verified native libraries inside ZaphRE-v3.0.0-side-by-side-arm64.apk ==="
-          unzip -l dist/ZaphRE-v3.0.0-side-by-side-arm64.apk "lib/arm64-v8a/*"
-          ls -lh dist/ZaphRE-v3.0.0-side-by-side-arm64.apk
+          cp app/build/outputs/apk/release/app-release.apk dist/ZaphRE-v3.1.0-side-by-side-arm64.apk
+          echo "=== Verified native libraries inside ZaphRE-v3.1.0-side-by-side-arm64.apk ==="
+          unzip -l dist/ZaphRE-v3.1.0-side-by-side-arm64.apk "lib/arm64-v8a/*"
+          ls -lh dist/ZaphRE-v3.1.0-side-by-side-arm64.apk
 
       - name: Report build failure details
         if: failure()
@@ -97,21 +97,21 @@ jobs:
       - name: Upload ZaphRE APK Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ZaphRE-v3.0.0-side-by-side-arm64
-          path: zaphre/dist/ZaphRE-v3.0.0-side-by-side-arm64.apk
+          name: ZaphRE-v3.1.0-side-by-side-arm64
+          path: zaphre/dist/ZaphRE-v3.1.0-side-by-side-arm64.apk
           if-no-files-found: error
 
       - name: Publish Direct-Download APK on GitHub Releases
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          TAG="zaphre-v3.0.0-side-by-side"
-          APK="zaphre/dist/ZaphRE-v3.0.0-side-by-side-arm64.apk"
+          TAG="zaphre-v3.1.0-side-by-side"
+          APK="zaphre/dist/ZaphRE-v3.1.0-side-by-side-arm64.apk"
           if gh release view "$TAG" >/dev/null 2>&1; then
             echo "Release already exists; retaining its APK and publishing this run's artifact only."
           else
             gh release create "$TAG" "$APK" \
               --target "${{ github.sha }}" \
-              --title "ZaphRE v3.0.0 (Side-by-side arm64)" \
+              --title "ZaphRE v3.1.0 (Side-by-side arm64)" \
               --notes "Portrait (9:16) ChatGPT-style Android MCPE RE Launcher compatible with LeviLauncher v1.7.1 + libZaphkiel.so. Direct-install signed arm64-v8a APK."
           fi

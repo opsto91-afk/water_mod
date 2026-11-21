@@ -20,6 +20,7 @@ import org.levimc.zaphre.ai.AiApiClient
 import org.levimc.zaphre.ai.AiSettingsStore
 import org.levimc.zaphre.ai.AgentTurnItem
 import org.levimc.zaphre.ai.ChatHistoryStore
+import org.levimc.zaphre.ai.ChatExport
 import org.levimc.zaphre.ai.ChatRole
 import org.levimc.zaphre.ai.ChatSession
 import org.levimc.zaphre.ai.ChatUiMessage
@@ -634,6 +635,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             appCtx.startActivity(Intent.createChooser(share, "Share ${f.name}").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
         }.onFailure {
             notify("Share failed: ${it.message}")
+        }
+    }
+
+    fun exportChat(uri: Uri, session: ChatSession) {
+        viewModelScope.launch(Dispatchers.IO) {
+            try {
+                val stream = appCtx.contentResolver.openOutputStream(uri, "wt")
+                    ?: throw java.io.IOException("Cannot open selected destination")
+                stream.bufferedWriter(Charsets.UTF_8).use { it.write(ChatExport.format(session)) }
+                notify("Chat exported")
+            } catch (e: Exception) { notify("Chat export failed: ${e.message}") }
+        }
+    }
+
+    fun saveFinding(message: ChatUiMessage, session: ChatSession) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val path = "notes/finding-${java.util.UUID.randomUUID()}.txt"
+            val content = ChatExport.format(session.copy(messages = listOf(message)))
+            WorkspaceFiles.writeText(appCtx, path, content).fold(
+                onSuccess = { notify("Saved to Files / $path") },
+                onFailure = { notify("Could not save finding: ${it.message}") }
+            )
         }
     }
 

@@ -13,8 +13,8 @@ object ZaphkielConfig {
     /** Original 61-byte prefix compiled into libZaphkiel.so */
     const val LEVI_KURUMI_PATH = "/storage/emulated/0/Android/media/org.levimc.launcher/kurumi/"
 
-    /** Exact 61-byte isolated ZaphRE workspace inside Android/media/org.levimc.zaphr3/zaphkiel/ */
-    const val ISOLATED_ZAPHKIEL_PATH = "/storage/emulated/0/Android/media/org.levimc.zaphr3/zaphkiel/"
+    /** Exact 61-byte isolated ZaphRE workspace inside Android/media/org.levimc.zaphr4/zaphkiel/ */
+    const val ISOLATED_ZAPHKIEL_PATH = "/storage/emulated/0/Android/media/org.levimc.zaphr4/zaphkiel/"
 
     const val PREFS_NAME = "zaphre_workspace_prefs"
     private const val KEY_WORKSPACE_MODE = "workspace_mode"
@@ -22,7 +22,7 @@ object ZaphkielConfig {
     enum class WorkspaceMode(val label: String, val subtitle: String) {
         ISOLATED(
             "Isolated ZaphRE Workspace",
-            "Android/media/org.levimc.zaphr3/zaphkiel/ (No extra permission needed, gaming Levi untouched)"
+            "Android/media/org.levimc.zaphr4/zaphkiel/ (No extra permission needed, gaming Levi untouched)"
         ),
         SHARED_LEVI(
             "Shared LeviLauncher kurumi/",
@@ -162,7 +162,7 @@ object ZaphkielConfig {
     }
 
     /**
-     * Active workspace directory (either isolated Android/media/org.levimc.zaphr3/zaphkiel/
+     * Active workspace directory (either isolated Android/media/org.levimc.zaphr4/zaphkiel/
      * or shared Android/media/org.levimc.launcher/kurumi/).
      */
     fun getWorkspaceDir(context: Context): File {
@@ -172,7 +172,7 @@ object ZaphkielConfig {
             shared.mkdirs()
             return shared
         }
-        // Calling externalMediaDirs grants our UID automatic full POSIX access to Android/media/org.levimc.zaphr3/
+        // Calling externalMediaDirs grants our UID automatic full POSIX access to Android/media/org.levimc.zaphr4/
         val mediaRoot = context.externalMediaDirs?.firstOrNull()
         val dir = if (mediaRoot != null) {
             File(mediaRoot, "zaphkiel")
