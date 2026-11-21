@@ -96,6 +96,8 @@ fun FilesScreen(
 
     var categoryFilter by rememberSaveable { mutableStateOf("All") }
     var createDialogFolder by remember { mutableStateOf<Boolean?>(null) }
+    var renameEntry by remember { mutableStateOf<org.levimc.zaphre.files.WorkspaceEntry?>(null) }
+    var deleteEntry by remember { mutableStateOf<org.levimc.zaphre.files.WorkspaceEntry?>(null) }
 
     if (openedFile != null) {
         FileViewerPane(
@@ -134,6 +136,20 @@ fun FilesScreen(
                 TextButton(onClick = { createDialogFolder = null }) { Text("Cancel") }
             }
         )
+    }
+
+    renameEntry?.let { entry ->
+        var newName by remember(entry.relativePath) { mutableStateOf(entry.name) }
+        AlertDialog(onDismissRequest = { renameEntry = null }, title = { Text("Rename") },
+            text = { OutlinedTextField(value = newName, onValueChange = { newName = it }, singleLine = true) },
+            confirmButton = { TextButton(onClick = { vm.renameFileEntry(entry.relativePath, newName); renameEntry = null }) { Text("Rename") } },
+            dismissButton = { TextButton(onClick = { renameEntry = null }) { Text("Cancel") } })
+    }
+    deleteEntry?.let { entry ->
+        AlertDialog(onDismissRequest = { deleteEntry = null }, title = { Text("Delete ${entry.name}?") },
+            text = { Text("This deletes the selected item${if (entry.isDirectory) " and its contents" else ""}.") },
+            confirmButton = { TextButton(onClick = { vm.deleteFileEntry(entry.relativePath); deleteEntry = null }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { deleteEntry = null }) { Text("Cancel") } })
     }
 
     Column(
@@ -267,8 +283,11 @@ fun FilesScreen(
                                     Icon(Icons.Default.Share, "Share", tint = ZaphSubtext, modifier = Modifier.size(16.dp))
                                 }
                             }
+                            IconButton(onClick = { renameEntry = entry }, modifier = Modifier.size(32.dp)) {
+                                Icon(Icons.Default.Edit, "Rename", tint = ZaphSubtext, modifier = Modifier.size(16.dp))
+                            }
                             IconButton(
-                                onClick = { vm.deleteFileEntry(entry.relativePath) },
+                                onClick = { deleteEntry = entry },
                                 modifier = Modifier.size(32.dp)
                             ) {
                                 Icon(Icons.Default.Delete, "Delete", tint = ZaphSubtext, modifier = Modifier.size(16.dp))
@@ -294,13 +313,16 @@ private fun FileViewerPane(
 ) {
     val clipboard = LocalClipboardManager.current
     var editing by remember { mutableStateOf(false) }
+    var waitingForEdit by remember { mutableStateOf(false) }
     var editBuffer by remember { mutableStateOf("") }
     var searchQuery by remember { mutableStateOf("") }
     var showSearch by remember { mutableStateOf(false) }
 
-    LaunchedEffect(editing, slice.content) {
-        if (editing) {
+    LaunchedEffect(waitingForEdit, slice) {
+        if (waitingForEdit && slice.rawForEdit) {
             editBuffer = slice.content
+            editing = true
+            waitingForEdit = false
         }
     }
 
@@ -351,7 +373,7 @@ private fun FileViewerPane(
                     }
                 } else {
                     IconButton(onClick = {
-                        editing = true
+                        waitingForEdit = true
                         onRequestRawForEdit()
                     }) {
                         Icon(Icons.Default.Edit, "Edit", tint = ZaphSubtext, modifier = Modifier.size(18.dp))

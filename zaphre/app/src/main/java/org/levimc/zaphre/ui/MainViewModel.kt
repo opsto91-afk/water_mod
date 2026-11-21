@@ -540,14 +540,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun openFile(relativePath: String, startLine: Int = 1, rawForEdit: Boolean = false) {
         viewModelScope.launch(Dispatchers.IO) {
             _fileSearchOutput.value = null
-            WorkspaceFiles.readSlice(
+            (if (rawForEdit) WorkspaceFiles.readForEdit(appCtx, relativePath) else WorkspaceFiles.readSlice(
                 context = appCtx,
                 path = relativePath,
                 startLine = startLine,
-                maxLines = if (rawForEdit) 1200 else 300,
-                maxChars = if (rawForEdit) 120_000 else 45_000,
-                withLineNumbers = !rawForEdit
-            ).fold(
+                maxLines = 300,
+                maxChars = 45_000,
+                withLineNumbers = true
+            )).fold(
                 onSuccess = { _openedFile.value = it },
                 onFailure = { notify("Cannot open: ${it.message}") }
             )
@@ -578,6 +578,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveFileContent(relativePath: String, content: String) {
         viewModelScope.launch(Dispatchers.IO) {
+            val original = _openedFile.value
+            val current = runCatching { WorkspaceFiles.resolveSafe(appCtx, relativePath).readText(Charsets.UTF_8) }.getOrNull()
+            if (original == null || !original.rawForEdit || original.relativePath != relativePath || current != original.content) {
+                notify("File changed or is not fully loaded; reopen before editing")
+                return@launch
+            }
             WorkspaceFiles.writeText(appCtx, relativePath, content).fold(
                 onSuccess = {
                     notify("Saved $relativePath")
@@ -602,6 +608,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     notify("Created $rel")
                 },
                 onFailure = { notify("Failed: ${it.message}") }
+            )
+        }
+    }
+
+    fun renameFileEntry(relativePath: String, newName: String) {
+        viewModelScope.launch(Dispatchers.IO) {
+            WorkspaceFiles.rename(appCtx, relativePath, newName.trim()).fold(
+                onSuccess = { notify("Renamed to ${it.name}"); refreshFiles() },
+                onFailure = { notify("Rename failed: ${it.message}") }
             )
         }
     }

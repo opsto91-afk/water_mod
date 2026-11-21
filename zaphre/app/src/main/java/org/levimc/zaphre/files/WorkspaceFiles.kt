@@ -45,7 +45,8 @@ data class FileSlice(
     val totalLines: Int,
     val sizeBytes: Long,
     val truncated: Boolean,
-    val content: String
+    val content: String,
+    val rawForEdit: Boolean = false
 )
 
 object WorkspaceFiles {
@@ -159,6 +160,31 @@ object WorkspaceFiles {
             truncated = hitCap,
             content = sb.toString()
         )
+    }
+
+    /** Complete bounded edit read; never use paged/clipped display text as edit source. */
+    fun readForEdit(context: Context, path: String): Result<FileSlice> = runCatching {
+        val file = resolveSafe(context, path)
+        require(file.isFile) { "File not found" }
+        require(file.length() <= 256 * 1024) { "File is too large for the editor" }
+        val bytes = file.readBytes()
+        require(bytes.size <= 256 * 1024 && bytes.none { it == 0.toByte() }) { "Only small UTF-8 text files can be edited" }
+        val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+        val text = decoder.decode(java.nio.ByteBuffer.wrap(bytes)).toString()
+        FileSlice(relativePath = path, startLine = 1, endLine = text.count { it == '\n' } + 1,
+            totalLines = text.count { it == '\n' } + 1, sizeBytes = bytes.size.toLong(),
+            truncated = false, content = text, rawForEdit = true)
+    }
+
+    fun rename(context: Context, path: String, newName: String): Result<File> = runCatching {
+        require(newName.isNotBlank() && newName != "." && newName != ".." && !newName.contains('/') && !newName.contains('\\')) { "Enter a file name without path separators" }
+        val source = resolveSafe(context, path)
+        val root = ZaphkielConfig.ensureWorkspaceLayout(context).canonicalFile
+        require(source.exists() && source.canonicalFile != root) { "Cannot rename this item" }
+        val target = resolveSafe(context, File(source.parentFile, newName).path)
+        require(!target.exists()) { "Destination already exists" }
+        require(source.renameTo(target)) { "Rename failed" }
+        target
     }
 
     /**

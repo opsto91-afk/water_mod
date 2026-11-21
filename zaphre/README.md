@@ -47,3 +47,6 @@ Online provider settings allow additional keys and an opt-in switch on HTTP 429.
 Files → Choose backup folder lets Android grant access to a folder. After a completed chat the app writes a new text backup there; Save finding writes a separate file there when selected, otherwise to workspace notes. Existing workspace is not relocated, and each backup is a new file. Check the destination and retain backups separately. Folder permissions can be revoked, and exports may contain private chat content. Tool outputs in saved history may have been truncated.
 
 Chat's attachment picker currently supports one UTF-8 text/code/JSON file up to 64 KiB. The text becomes part of the chat and is sent to the selected provider, so it can affect token usage. PDF, images, video, binary files, large files and attachment-specific multimodal APIs are not supported by this reader.
+
+### Workspace editing
+Workspace list supports rename and asks before delete. The text editor now loads the complete UTF-8 file (up to 256 KiB) instead of editing the paginated/clipped viewer output; save refuses to overwrite if the file changed since opening. Folder-selected backups are not part of this workspace browser. AI file operations still use their existing workspace tools; approval prompts for AI writes are not yet implemented.
