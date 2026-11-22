@@ -24,6 +24,22 @@ android {
             cmake {
                 cppFlags += listOf("-std=c++17", "-O2", "-fvisibility=hidden")
                 arguments += listOf("-DANDROID_STL=c++_static")
+                // Explicit opt-in only: unsupported CPUs can crash when using advanced ARM instructions.
+                providers.gradleProperty("petaArmArch").orNull?.takeIf { it.isNotBlank() }?.let {
+                    arguments += listOf("-DGGML_CPU_ARM_ARCH=$it")
+                }
+            }
+        }
+    }
+
+    signingConfigs {
+        create("petaStable") {
+            val ksPath = System.getenv("PETA_KEYSTORE_PATH")
+            if (!ksPath.isNullOrBlank()) {
+                storeFile = file(ksPath)
+                storePassword = System.getenv("PETA_KEYSTORE_PASSWORD")
+                keyAlias = System.getenv("PETA_KEY_ALIAS")
+                keyPassword = System.getenv("PETA_KEY_PASSWORD")
             }
         }
     }
@@ -34,9 +50,10 @@ android {
             isDebuggable = true
         }
         release {
-            // Sign with debug key by default so the CI APK installs directly on any phone
-            // unless a custom signing keystore is provided.
-            signingConfig = signingConfigs.getByName("debug")
+            // A stable key is needed for future in-place updates. Debug is only a local fallback;
+            // CI requires stable credentials before it produces a release.
+            signingConfig = if (!System.getenv("PETA_KEYSTORE_PATH").isNullOrBlank())
+                signingConfigs.getByName("petaStable") else signingConfigs.getByName("debug")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),

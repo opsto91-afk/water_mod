@@ -7,6 +7,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -52,6 +53,15 @@ data class ModelResponse(
  *  - Automatic `<tool_call>{...}</tool_call>` XML parser fallback for local GGUF / non-tool models.
  */
 object AiApiClient {
+
+    private fun validateCustomEndpoint(settings: ActiveAiSettings, requireModel: Boolean) {
+        if (settings.providerId != "custom_openai" && !settings.providerId.startsWith("profile_")) return
+        val url = normalizeBaseUrl(settings.baseUrl).toHttpUrlOrNull()
+            ?: throw IOException("Enter a valid provider Base URL (for example https://provider.example/v1).")
+        if (url.username.isNotEmpty() || url.password.isNotEmpty() || url.query != null || url.fragment != null)
+            throw IOException("Base URL must not contain credentials, a query, or a fragment.")
+        if (requireModel && settings.model.isBlank()) throw IOException("Enter the provider's exact Model ID.")
+    }
 
     private val JSON_MEDIA = "application/json; charset=utf-8".toMediaType()
 
@@ -147,6 +157,7 @@ object AiApiClient {
             throw IOException("API key is empty for ${settings.preset.name}. Open the AI tab and paste your API key.")
         }
 
+        validateCustomEndpoint(settings, requireModel = true)
         val media = history.filterIsInstance<AgentTurnItem.User>().mapNotNull { it.media }
         for (attachment in media) {
             val supported = when (settings.protocol) {
@@ -169,14 +180,14 @@ object AiApiClient {
         val resp = if (settings.providerId == "local_builtin") {
             val localSystem = systemPrompt + if (tools.isNotEmpty()) "\n\n" + buildCompactLocalToolInstructions(tools) else ""
             val localHistory = buildString {
-                history.takeLast(8).forEach { turn ->
+                history.takeLast(6).forEach { turn ->
                     when (turn) {
-                        is AgentTurnItem.User -> appendLine("User: ${turn.text.take(4000)}")
+                        is AgentTurnItem.User -> appendLine("User: ${turn.text.take(2000)}")
                         is AgentTurnItem.Assistant -> {
-                            if (turn.text.isNotBlank()) appendLine("Assistant: ${turn.text.take(2000)}")
+                            if (turn.text.isNotBlank()) appendLine("Assistant: ${turn.text.take(1000)}")
                             turn.toolCalls.forEach { appendLine("<tool_call>${JSONObject().put("name", it.name).put("arguments", it.args)}</tool_call>") }
                         }
-                        is AgentTurnItem.ToolResult -> appendLine("<tool_result name=\"${turn.toolName}\">${turn.output.take(4000)}</tool_result>")
+                        is AgentTurnItem.ToolResult -> appendLine("<tool_result name=\"${turn.toolName}\">${turn.output.take(1500)}</tool_result>")
                     }
                 }
                 append("Assistant:")
@@ -217,6 +228,7 @@ object AiApiClient {
 
     suspend fun fetchAvailableModels(settings: ActiveAiSettings): Result<List<String>> = withContext(Dispatchers.IO) {
         runCatching {
+            validateCustomEndpoint(settings, requireModel = false)
             when (settings.protocol) {
                 ApiProtocol.GEMINI_NATIVE -> {
                     require(settings.apiKey.isNotBlank()) { "Enter your Google Gemini API key first" }
@@ -242,7 +254,7 @@ object AiApiClient {
                 ApiProtocol.ANTHROPIC_NATIVE -> {
                     if (settings.apiKey.isBlank()) return@runCatching settings.preset.suggestedModels
                     val req = Request.Builder()
-                        .url("${settings.baseUrl}/models")
+                        .url("${normalizeBaseUrl(settings.baseUrl)}/models")
                         .header("x-api-key", settings.apiKey)
                         .header("anthropic-version", "2023-06-01")
                         .get()
@@ -256,7 +268,7 @@ object AiApiClient {
                 }
 
                 ApiProtocol.OPENAI_COMPAT -> {
-                    val rb = Request.Builder().url("${settings.baseUrl}/models").get()
+                    val rb = Request.Builder().url("${normalizeBaseUrl(settings.baseUrl)}/models").get()
                     if (settings.apiKey.isNotBlank()) {
                         rb.header("Authorization", "Bearer ${settings.apiKey}")
                     }
@@ -527,7 +539,7 @@ object AiApiClient {
         }
 
         val rb = Request.Builder()
-            .url("${settings.baseUrl}/chat/completions")
+            .url("${normalizeBaseUrl(settings.baseUrl)}/chat/completions")
             .post(payload.toString().toRequestBody(JSON_MEDIA))
         if (settings.apiKey.isNotBlank()) {
             rb.header("Authorization", "Bearer ${settings.apiKey}")

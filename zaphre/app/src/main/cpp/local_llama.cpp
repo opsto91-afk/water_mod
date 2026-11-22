@@ -3,6 +3,7 @@
 #include <iomanip>
 #include <cmath>
 #include <atomic>
+#include <mutex>
 #include <string>
 #include <unistd.h>
 #include <sampling.h>
@@ -20,6 +21,19 @@ static std::string join(const std::vector<T> &values, const std::string &delim) 
         if (i < values.size() - 1) { str << delim; }
     }
     return str.str();
+}
+
+// Keep the last llama.cpp ERROR lines so the UI can show the real reason a model failed to load
+// (unsupported architecture, not enough memory, truncated file...) instead of a generic message.
+static std::mutex g_err_mutex;
+static std::string g_last_error;
+static void capture_log_callback(enum ggml_log_level level, const char *text, void *user) {
+    if (text != nullptr && level == GGML_LOG_LEVEL_ERROR) {
+        std::lock_guard<std::mutex> lk(g_err_mutex);
+        for (const char *c = text; *c; ++c) g_last_error.push_back(((unsigned char) *c >= 0x80) ? '?' : *c);
+        if (g_last_error.size() > 2000) g_last_error.erase(0, g_last_error.size() - 2000);
+    }
+    aichat_android_log_callback(level, text, user);
 }
 
 /**
@@ -46,7 +60,7 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_org_levimc_zaphre_ai_LocalLlama_init(JNIEnv *env, jobject /*unused*/, jstring nativeLibDir) {
     // Set llama log handler to Android
-    llama_log_set(aichat_android_log_callback, nullptr);
+    llama_log_set(capture_log_callback, nullptr);
 
     // Loading all CPU backend variants
     const auto *path_to_backend = env->GetStringUTFChars(nativeLibDir, 0);
@@ -62,6 +76,7 @@ Java_org_levimc_zaphre_ai_LocalLlama_init(JNIEnv *env, jobject /*unused*/, jstri
 extern "C"
 JNIEXPORT jint JNICALL
 Java_org_levimc_zaphre_ai_LocalLlama_load(JNIEnv *env, jobject, jstring jmodel_path) {
+    { std::lock_guard<std::mutex> lk(g_err_mutex); g_last_error.clear(); }
     llama_model_params model_params = llama_model_default_params();
 
     const auto *model_path = env->GetStringUTFChars(jmodel_path, 0);
@@ -261,11 +276,13 @@ constexpr const char *ROLE_USER         = "user";
 constexpr const char *ROLE_ASSISTANT    = "assistant";
 
 static std::vector<common_chat_msg> chat_msgs;
+static std::string g_cached_system_prompt;   // raw system prompt whose KV entries are still valid
 static llama_pos system_prompt_position;
 static llama_pos current_position;
 
 static void reset_long_term_states(const bool clear_kv_cache = true) {
     chat_msgs.clear();
+    g_cached_system_prompt.clear();
     system_prompt_position = 0;
     current_position = 0;
 
@@ -372,21 +389,32 @@ Java_org_levimc_zaphre_ai_LocalLlama_processSystemPrompt(
         jobject /*unused*/,
         jstring jsystem_prompt
 ) {
-    // Reset long-term & short-term states
+    // Copy the prompt out of the JVM first so it can be compared with the cached one.
+    const auto *system_prompt_chars = env->GetStringUTFChars(jsystem_prompt, nullptr);
+    const std::string system_prompt(system_prompt_chars);   // Do not log prompts.
+    env->ReleaseStringUTFChars(jsystem_prompt, system_prompt_chars);
+
+    // Fast path: same system prompt as last time -> keep its KV entries, drop everything after it.
+    // Saves re-decoding the whole system prompt + tool list on every request / agent step.
+    // Recurrent/hybrid models can refuse a partial rollback (seq_rm returns false) -> use the slow path.
+    if (system_prompt_position > 0 && system_prompt == g_cached_system_prompt) {
+        reset_short_term_states();
+        if (llama_memory_seq_rm(llama_get_memory(g_context), 0, system_prompt_position, -1)) {
+            current_position = system_prompt_position;
+            if (chat_msgs.size() > 1) chat_msgs.resize(1);   // keep only the system message
+            return 0;
+        }
+    }
+
+    // Slow path: reset everything and decode the system prompt again.
     reset_long_term_states();
     reset_short_term_states();
 
-    // Obtain system prompt from JEnv
-    const auto *system_prompt = env->GetStringUTFChars(jsystem_prompt, nullptr);
-    // Do not log prompts.
     std::string formatted_system_prompt(system_prompt);
-
-    // Format system prompt if applicable
     const bool has_chat_template = common_chat_templates_was_explicit(g_chat_templates.get());
     if (has_chat_template) {
         formatted_system_prompt = chat_add_and_format(ROLE_SYSTEM, system_prompt);
     }
-    env->ReleaseStringUTFChars(jsystem_prompt, system_prompt);
 
     // Tokenize system prompt
     const auto system_tokens = common_tokenize(g_context, formatted_system_prompt,
@@ -408,6 +436,7 @@ Java_org_levimc_zaphre_ai_LocalLlama_processSystemPrompt(
 
     // Update position
     system_prompt_position = current_position = (int) system_tokens.size();
+    g_cached_system_prompt = system_prompt;
     return 0;
 }
 
@@ -578,4 +607,16 @@ extern "C"
 JNIEXPORT void JNICALL
 Java_org_levimc_zaphre_ai_LocalLlama_shutdown(JNIEnv *, jobject /*unused*/) {
     llama_backend_free();
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_org_levimc_zaphre_ai_LocalLlama_lastError(JNIEnv *env, jobject /*unused*/) {
+    std::string s;
+    {
+        std::lock_guard<std::mutex> lk(g_err_mutex);
+        s = g_last_error;
+        g_last_error.clear();
+    }
+    return env->NewStringUTF(s.c_str());
 }

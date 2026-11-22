@@ -1,16 +1,12 @@
 name: ZaphRE APK Build
 
 on:
-  push:
-    paths:
-      - "zaphre/**"
-      - ".github/workflows/zaphre-apk.yml"
   workflow_dispatch:
     inputs:
       source_bundle:
         description: "Package ZaphRE v3 source and runtime dependencies only"
         type: boolean
-        default: false
+        default: true
       build_only:
         description: "Build APK without running automated tests"
         type: boolean
@@ -77,6 +73,27 @@ jobs:
         with:
           gradle-version: "8.11.1"
 
+      - name: Prepare stable release signing
+        env:
+          PETA_KEYSTORE_B64: ${{ secrets.PETA_KEYSTORE_B64 }}
+          PETA_KEYSTORE_PASSWORD: ${{ secrets.PETA_KEYSTORE_PASSWORD }}
+          PETA_KEY_ALIAS: ${{ secrets.PETA_KEY_ALIAS }}
+          PETA_KEY_PASSWORD: ${{ secrets.PETA_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${PETA_KEYSTORE_B64:-}" ] || [ -z "${PETA_KEYSTORE_PASSWORD:-}" ] || [ -z "${PETA_KEY_ALIAS:-}" ] || [ -z "${PETA_KEY_PASSWORD:-}" ]; then
+            echo "::error::Stable release signing is not configured. Add the PETA signing secrets in repository settings."
+            exit 1
+          fi
+          printf '%s' "$PETA_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/peta-release.jks"
+          chmod 600 "$RUNNER_TEMP/peta-release.jks"
+          {
+            echo "PETA_KEYSTORE_PATH=$RUNNER_TEMP/peta-release.jks"
+            echo "PETA_KEYSTORE_PASSWORD=$PETA_KEYSTORE_PASSWORD"
+            echo "PETA_KEY_ALIAS=$PETA_KEY_ALIAS"
+            echo "PETA_KEY_PASSWORD=$PETA_KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
       - name: Run Kotlin Unit Tests
         if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.build_only) }}
         working-directory: zaphre
@@ -92,6 +109,10 @@ jobs:
           echo "=== Verified native libraries inside PETA-V93-arm64.apk ==="
           unzip -l dist/PETA-V93-arm64.apk "lib/arm64-v8a/*"
           ls -lh dist/PETA-V93-arm64.apk
+
+      - name: Show release certificate fingerprint
+        working-directory: zaphre
+        run: '"$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --print-certs dist/PETA-V93-arm64.apk'
 
       - name: Report build failure details
         if: failure()

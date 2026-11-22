@@ -67,6 +67,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import org.levimc.zaphre.ai.BUILTIN_PROVIDERS
+import org.levimc.zaphre.ai.normalizeBaseUrl
 import org.levimc.zaphre.ai.ToolCallMode
 import org.levimc.zaphre.terminal.ShellExecutor
 import org.levimc.zaphre.ui.theme.ZaphAccent
@@ -146,7 +147,7 @@ fun AiSettingsScreen(vm: MainViewModel) {
     }
 
     fun currentDraft() = saved.copy(
-        baseUrl = baseUrl.trim().trimEnd('/'),
+        baseUrl = normalizeBaseUrl(baseUrl),
         apiKey = apiKey.trim(),
         additionalKeys = extraKeys,
         autoSwitchKeys = autoSwitchKeys,
@@ -367,6 +368,7 @@ fun AiSettingsScreen(vm: MainViewModel) {
                         value = baseUrl,
                         onValueChange = { baseUrl = it },
                         label = { Text("Base URL", fontSize = 12.sp) },
+                        placeholder = { if (baseUrl.isBlank()) Text("https://provider.example/v1", fontSize = 12.sp) },
                         textStyle = TextStyle(fontFamily = FontFamily.Monospace, fontSize = 12.sp, color = ZaphText),
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()

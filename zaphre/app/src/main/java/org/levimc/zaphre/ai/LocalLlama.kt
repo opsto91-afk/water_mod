@@ -32,6 +32,7 @@ object LocalLlama {
     private external fun processUserPrompt(userPrompt: String, predictLength: Int): Int
     private external fun generateNextToken(): String?
     private external fun unload()
+    private external fun lastError(): String
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private val inference = Dispatchers.IO.limitedParallelism(1)
@@ -81,6 +82,7 @@ object LocalLlama {
     fun cancelTransfer() { transferJob?.cancel(); transferCall?.cancel() }
 
     private var loadedPath: String? = null
+    private val localStopMarkers = listOf("\nUser:", "\nAssistant:", "\n<tool_result")
     private val client = OkHttpClient.Builder().connectTimeout(30, TimeUnit.SECONDS).readTimeout(120, TimeUnit.SECONDS).build()
 
     data class CatalogueItem(val name: String, val url: String)
@@ -102,8 +104,19 @@ object LocalLlama {
         }
     }
     private fun safeName(name: String): String = name.substringAfterLast('/').replace(Regex("[^a-zA-Z0-9._-]"), "_").take(120).let { if (it.endsWith(".gguf", true)) it else "$it.gguf" }
+    private fun displayName(context: Context, uri: Uri): String? = runCatching {
+        context.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)
+            ?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+    }.getOrNull()
     suspend fun importModel(context: Context, uri: Uri) = withContext(Dispatchers.IO) {
-        val file = File(folder(context), "imported-${System.currentTimeMillis()}.gguf")
+        val base = safeName(displayName(context, uri) ?: "imported-${System.currentTimeMillis()}.gguf")
+        val root = folder(context)
+        var file = File(root, base)
+        if (file.exists() || File(file.path + ".part").exists()) {
+            val stem = base.dropLast(5)
+            do { file = File(root, "$stem-${java.util.UUID.randomUUID().toString().take(8)}.gguf") }
+            while (file.exists() || File(file.path + ".part").exists())
+        }
         val tmp = File(file.path + ".part")
         try {
             status.value = "Importing model…"
@@ -162,8 +175,15 @@ object LocalLlama {
         if (!initialized) { System.loadLibrary("zaphre_llama"); init(context.applicationInfo.nativeLibraryDir); initialized = true }
         if (loadedPath != null) { unload(); loadedPath = null; loaded.value = null }
         status.value = "Loading $name…"
-        if (load(file.absolutePath) != 0) throw IOException("Could not load this model architecture")
-        if (prepare(options.value.context, options.value.threads, options.value.temperature) != 0) throw IOException("Could not create model context; try a smaller model")
+        if (load(file.absolutePath) != 0) {
+            val why = lastError().trim().takeLast(400)
+            throw IOException("Could not load $name" + if (why.isNotBlank()) ": $why" else " (no details from llama.cpp; check free RAM and that the file is a complete GGUF)")
+        }
+        if (prepare(options.value.context, options.value.threads, options.value.temperature) != 0) {
+            val why = lastError().trim().takeLast(400)
+            unload()
+            throw IOException("Could not create model context" + if (why.isNotBlank()) ": $why" else "; try a smaller model or a smaller context")
+        }
         loadedPath = file.absolutePath
         loaded.value = name
         status.value = "Ready: $name (CPU)"
@@ -201,6 +221,8 @@ object LocalLlama {
             currentCoroutineContext().ensureActive()
             val next = generateNextToken() ?: break
             result.append(next)
+            val cut = localStopMarkers.map { result.indexOf(it) }.filter { it >= 0 }.minOrNull()
+            if (cut != null) { result.setLength(cut); break }
             val now = System.currentTimeMillis()
             if (onPartial != null && now - lastUpdate >= 250) { onPartial(result.toString()); lastUpdate = now }
         }

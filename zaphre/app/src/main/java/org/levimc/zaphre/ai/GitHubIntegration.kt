@@ -57,11 +57,22 @@ object GitHubIntegration {
             return "SHA: ${json.getString("sha")}\n--- FILE CONTENT (untrusted) ---\n$content"
         }
     }
+    /** Only explicit text-like paths are eligible for GitHub writes; no app or native binaries. */
+    private fun requireAllowedTextUpload(path: String, content: String) {
+        val name = path.substringAfterLast('/').lowercase(java.util.Locale.ROOT)
+        val banned = Regex("(?i)(\\.so(?:\\.|$)|\\.apk(?:\\.|$)|\\.gguf(?:\\.|$))")
+        require(!path.contains("libminecraftpe", ignoreCase = true) && !banned.containsMatchIn(path)) { "Minecraft, native libraries, APKs and GGUF files cannot be uploaded" }
+        val textExtensions = setOf("txt", "md", "markdown", "json", "jsonl", "yaml", "yml", "toml", "ini", "cfg", "xml", "csv", "tsv", "log", "c", "h", "cc", "cpp", "hpp", "cxx", "rs", "py", "java", "kt", "kts", "js", "ts", "sh", "gradle", "html", "css", "sql", "patch", "diff")
+        val allowedSpecial = setOf("readme", "license", "notice", "makefile", "cmakelists.txt", ".gitignore", ".gitattributes")
+        require(name in allowedSpecial || ('.' in name && name.substringAfterLast('.') in textExtensions)) { "Only supported text/code filenames may be uploaded" }
+        require(content.none { (it.code < 32 && it != '\n' && it != '\r' && it != '\t') || it.code == 127 }) { "Binary or control characters are not allowed in GitHub uploads" }
+    }
     fun createFile(context: Context, path: String, content: String, message: String, approvedOwner: String, approvedRepo: String, approvedBranch: String, expectedSha: String = ""): String {
         val cfg = config(context)
         if (!cfg.enabled) throw IOException("GitHub integration is off")
         if (cfg.owner != approvedOwner || cfg.repo != approvedRepo || cfg.branch != approvedBranch) throw IOException("GitHub target changed; request approval again")
         require(expectedSha.isBlank() || expectedSha.matches(Regex("[a-fA-F0-9]{40}"))) { "Invalid Git blob SHA" }
+        requireAllowedTextUpload(path, content)
         require(content.toByteArray(Charsets.UTF_8).size <= 65536) { "File exceeds 64 KiB" }
         require(message.isNotBlank() && message.length <= 200) { "Commit message required" }
         val url = url(cfg, path)

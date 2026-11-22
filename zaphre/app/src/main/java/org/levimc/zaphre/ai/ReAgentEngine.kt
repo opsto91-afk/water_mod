@@ -68,6 +68,13 @@ object ReAgentEngine {
         // A killed process may have interrupted a tool after side effects. Require review on
         // subsequent tool calls; never infer that the old operation did or did not finish.
         val hasUncertainTool = recovery?.needsReview ?: priorMessages.any { message -> message.toolSteps.any { it.running } }
+        val repeatedLocalCalls = mutableMapOf<String, Int>()
+        if (settings.preset.isLocal && recovery != null) {
+            recovery.history.filterIsInstance<AgentTurnItem.Assistant>().flatMap { it.toolCalls }.forEach { call ->
+                val signature = call.name + "\u0000" + call.args.toString()
+                repeatedLocalCalls[signature] = (repeatedLocalCalls[signature] ?: 0) + 1
+            }
+        }
         val recordedSteps = recovery?.steps?.toMutableList() ?: mutableListOf()
         var accumulatedText = recovery?.text ?: ""
         val canCheckpoint = sessionId != null && media == null
@@ -134,6 +141,14 @@ object ReAgentEngine {
                 // Execute every requested tool sequentially and stream progress to Chat UI
                 for (tc in response.toolCalls) {
                     listener.awaitPermission()
+                    if (settings.preset.isLocal) {
+                        val signature = tc.name + "\u0000" + tc.args.toString()
+                        val count = (repeatedLocalCalls[signature] ?: 0) + 1
+                        repeatedLocalCalls[signature] = count
+                        if (count > 2) return finish(ChatUiMessage(role = ChatRole.ASSISTANT,
+                            text = (accumulatedText + "\n\n*(Stopped: local model repeated ${tc.name}. Try a narrower question.)*").trim(),
+                            toolSteps = recordedSteps.toList(), modelTag = modelBadge), step)
+                    }
                     val runningRec = ToolStepRecord(
                         id = tc.id,
                         toolName = tc.name,

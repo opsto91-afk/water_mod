@@ -173,12 +173,24 @@ val BUILTIN_PROVIDERS: List<AiProviderPreset> = listOf(
         name = "Custom OpenAI-Compatible API",
         badge = "Custom",
         protocol = ApiProtocol.OPENAI_COMPAT,
-        baseUrl = "https://api.openai.com/v1",
-        defaultModel = "gpt-4o-mini",
+        baseUrl = "",
+        defaultModel = "",
         suggestedModels = emptyList(),
         keyHint = "Bearer API Key (optional)"
     )
 )
+
+/** Normalize a pasted OpenAI-compatible chat endpoint to its base URL. */
+fun normalizeBaseUrl(raw: String): String {
+    var result = raw.trim().trimEnd('/')
+    for (suffix in listOf("/chat/completions", "/completions")) {
+        if (result.endsWith(suffix, ignoreCase = true)) {
+            result = result.dropLast(suffix.length).trimEnd('/')
+            break
+        }
+    }
+    return result
+}
 
 data class ActiveAiSettings(
     val providerId: String = "gemini",
@@ -223,7 +235,7 @@ object AiSettingsStore {
             providerId = preset.id,
             profileName = profile?.name ?: "",
             protocol = preset.protocol,
-            baseUrl = baseUrl.trim().trimEnd('/'),
+            baseUrl = normalizeBaseUrl(baseUrl),
             apiKey = key.trim(),
             additionalKeys = keyLoad.getOrDefault(emptyList()),
             additionalKeysUnavailable = keyLoad.isFailure,
@@ -244,7 +256,7 @@ object AiSettingsStore {
         ExtraKeyStore.save(context, pid, s.additionalKeys.map { it.trim() }.filter { it.isNotEmpty() }.distinct())
         context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit()
             .putString("active_provider", pid)
-            .putString("url_$pid", s.baseUrl.trim().trimEnd('/'))
+            .putString("url_$pid", normalizeBaseUrl(s.baseUrl))
             .putString("key_$pid", s.apiKey.trim())
             .putBoolean("auto_switch_$pid", s.autoSwitchKeys)
             .putBoolean("ask_switch_$pid", s.askSwitchKeys)
