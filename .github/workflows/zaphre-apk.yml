@@ -7,6 +7,10 @@ on:
       - ".github/workflows/zaphre-apk.yml"
   workflow_dispatch:
     inputs:
+      source_bundle:
+        description: "Package ZaphRE v3 source and runtime dependencies only"
+        type: boolean
+        default: false
       build_only:
         description: "Build APK without running automated tests"
         type: boolean
@@ -17,7 +21,7 @@ permissions:
 
 jobs:
   native-host-tests:
-    if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.build_only) }}
+    if: ${{ !(github.event_name == 'workflow_dispatch' && (inputs.build_only || inputs.source_bundle)) }}
     name: C++17 ELF Analyzer Tests
     runs-on: ubuntu-latest
     steps:
@@ -33,7 +37,7 @@ jobs:
   build-apk:
     name: Build ZaphRE arm64-v8a APK (Levi v1.7.1 Runtime)
     needs: native-host-tests
-    if: ${{ always() && (needs.native-host-tests.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.build_only && needs.native-host-tests.result == 'skipped')) }}
+    if: ${{ always() && !inputs.source_bundle && (needs.native-host-tests.result == 'success' || (github.event_name == 'workflow_dispatch' && inputs.build_only && needs.native-host-tests.result == 'skipped')) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -125,4 +129,66 @@ jobs:
               --target "$GITHUB_SHA" \
               --title "PETA V93 build ${GITHUB_SHA:0:8}" \
               --notes "Arm64 side-by-side build. Built without automated tests at user request. Separate package; automatic v3 private-data migration is not available. Job recovery and media/provider support have platform limits."
+          fi
+
+  v3-source-bundle:
+    name: Package ZaphRE v3 source and native dependencies
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.source_bundle }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out the exact v3 source commit
+        uses: actions/checkout@v4
+        with:
+          ref: ef89cb22aa622d6f0de36c5bc313e9cb90317fbc
+      - name: Assemble source bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="$RUNNER_TEMP/ZaphRE-v3-complete"
+          mkdir -p "$ROOT" "$RUNNER_TEMP/downloads"
+          cp -a zaphre/. "$ROOT/"
+          mkdir -p "$ROOT/vendor/llama.cpp" "$ROOT/app/src/main/jniLibs/arm64-v8a" "$ROOT/build-support"
+          cp .github/workflows/zaphre-apk.yml "$ROOT/build-support/original-v3-ci.yml"
+          curl -fL --retry 3 -o "$RUNNER_TEMP/downloads/llama.tar.gz" https://codeload.github.com/ggml-org/llama.cpp/tar.gz/6f5c9ad21746f69bbb7f3cb295a90e53fe316963
+          tar -xzf "$RUNNER_TEMP/downloads/llama.tar.gz" --strip-components=1 -C "$ROOT/vendor/llama.cpp"
+          gh release download v1.7.1 --repo LiteLDev/LeviLauncher-Android --pattern 'LeviLauncher-v1.7.1-release.apk' --dir "$RUNNER_TEMP/downloads"
+          unzip -o -j "$RUNNER_TEMP/downloads/LeviLauncher-v1.7.1-release.apk" 'lib/arm64-v8a/libPlayFabMultiplayer.so' 'lib/arm64-v8a/libmaesdk.so' 'lib/arm64-v8a/libHttpClient.Android.so' 'lib/arm64-v8a/libpreloader.so' -d "$ROOT/app/src/main/jniLibs/arm64-v8a"
+          python3 - "$ROOT" <<'PYCODE'
+          from pathlib import Path
+          import sys
+          root = Path(sys.argv[1])
+          cmake = root / 'app/src/main/cpp/CMakeLists.txt'
+          s = cmake.read_text()
+          before = 'FetchContent_Declare(llama_cpp URL https://codeload.github.com/ggml-org/llama.cpp/tar.gz/6f5c9ad21746f69bbb7f3cb295a90e53fe316963)\nFetchContent_MakeAvailable(llama_cpp)'
+          after = 'set(llama_cpp_SOURCE_DIR "${CMAKE_CURRENT_LIST_DIR}/../../../../vendor/llama.cpp")\nadd_subdirectory("${llama_cpp_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/llama_cpp")'
+          if before not in s: raise SystemExit('Unexpected v3 CMake file')
+          cmake.write_text(s.replace(before, after))
+          (root / 'BUNDLE-INFO.txt').write_text("""ZaphRE v3 source + bundled native dependencies
+          ZaphRE source commit: ef89cb22aa622d6f0de36c5bc313e9cb90317fbc (org.levimc.zaphr3, v3.0.0).
+          Includes the full pinned llama.cpp source at vendor/llama.cpp, commit 6f5c9ad21746f69bbb7f3cb295a90e53fe316963, including its license.
+          Includes the four arm64 runtime libraries extracted unmodified from the official LeviLauncher Android v1.7.1 release APK.
+          The CMake file is modified solely to use the bundled llama.cpp source instead of fetching it.
+          Original v3 GitHub Actions instructions are in build-support/original-v3-ci.yml.
+          This is not the compiled ZaphRE APK and contains no GGUF models, Minecraft libraries, libZaphkiel.so, chats or keys.
+          Android SDK platform 35, build-tools 35.0.0, NDK 27.2.12479018, CMake 3.22.1, JDK 21 and Gradle 8.11.1 are not bundled; Gradle and Android libraries may require network access. See README.md.
+          Third-party components retain their original licenses and terms.
+          """)
+          PYCODE
+          cd "$RUNNER_TEMP"
+          zip -qr ZaphRE-v3-source-with-dependencies.zip ZaphRE-v3-complete
+          ls -lh ZaphRE-v3-source-with-dependencies.zip
+      - name: Upload downloadable bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAG=zaphre-v3-source-bundle
+          ASSET="$RUNNER_TEMP/ZaphRE-v3-source-with-dependencies.zip"
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ASSET" --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$TAG" "$ASSET" --repo "$GITHUB_REPOSITORY" --target ef89cb22aa622d6f0de36c5bc313e9cb90317fbc --title 'ZaphRE v3 source with dependencies' --notes 'v3 source, pinned llama.cpp source, and the four LeviLauncher v1.7.1 arm64 runtime libraries. Android SDK, JDK, Gradle dependencies, GGUF models and Minecraft are not bundled.'
           fi
