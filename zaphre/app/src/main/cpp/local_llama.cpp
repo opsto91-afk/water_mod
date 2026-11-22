@@ -286,7 +286,7 @@ static void reset_long_term_states(const bool clear_kv_cache = true) {
     system_prompt_position = 0;
     current_position = 0;
 
-    if (clear_kv_cache)
+    if (clear_kv_cache && g_context)
         llama_memory_clear(llama_get_memory(g_context), false);
 }
 
@@ -450,6 +450,7 @@ Java_org_levimc_zaphre_ai_LocalLlama_processUserPrompt(
 ) {
     // Reset short-term states
     reset_short_term_states();
+    common_sampler_reset(g_sampler);
 
     // Obtain and tokenize user prompt
     const auto *const user_prompt = env->GetStringUTFChars(juser_prompt, nullptr);
@@ -596,11 +597,14 @@ Java_org_levimc_zaphre_ai_LocalLlama_unload(JNIEnv * /*unused*/, jobject /*unuse
     reset_short_term_states();
 
     // Free up resources
-    common_sampler_free(g_sampler);
+    if (g_sampler) common_sampler_free(g_sampler);
+    g_sampler = nullptr;
     g_chat_templates.reset();
     g_batch = common_batch();
-    llama_free(g_context);
-    llama_model_free(g_model);
+    if (g_context) llama_free(g_context);
+    g_context = nullptr;
+    if (g_model) llama_model_free(g_model);
+    g_model = nullptr;
 }
 
 extern "C"
