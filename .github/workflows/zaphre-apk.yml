@@ -82,9 +82,11 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${PETA_KEYSTORE_B64:-}" ] || [ -z "${PETA_KEYSTORE_PASSWORD:-}" ] || [ -z "${PETA_KEY_ALIAS:-}" ] || [ -z "${PETA_KEY_PASSWORD:-}" ]; then
-            echo "::error::Stable release signing is not configured. Add the PETA signing secrets in repository settings."
-            exit 1
+            echo "::warning::Stable release signing is not configured. This build uses a temporary debug key and may not update an existing installation."
+            echo "PETA_SIGNING_MODE=temporary debug key" >> "$GITHUB_ENV"
+            exit 0
           fi
+          echo "PETA_SIGNING_MODE=stable configured key" >> "$GITHUB_ENV"
           printf '%s' "$PETA_KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/peta-release.jks"
           chmod 600 "$RUNNER_TEMP/peta-release.jks"
           {
@@ -149,7 +151,7 @@ jobs:
             gh release create "$TAG" "$APK" \
               --target "$GITHUB_SHA" \
               --title "PETA V93 build ${GITHUB_SHA:0:8}" \
-              --notes "Arm64 side-by-side build. Built without automated tests at user request. Separate package; automatic v3 private-data migration is not available. Job recovery and media/provider support have platform limits."
+              --notes "Arm64 side-by-side build. Signing: ${PETA_SIGNING_MODE}. A temporary debug key will not match previous builds and cannot provide reliable in-place updates. Separate package; automatic v3 private-data migration is not available. Job recovery and media/provider support have platform limits."
           fi
 
   v3-source-bundle:
