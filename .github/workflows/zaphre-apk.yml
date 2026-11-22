@@ -6,11 +6,11 @@ on:
       source_bundle:
         description: "Package ZaphRE v3 source and runtime dependencies only"
         type: boolean
-        default: true
+        default: false
       build_only:
         description: "Build APK without running automated tests"
         type: boolean
-        default: false
+        default: true
 
 permissions:
   contents: write
