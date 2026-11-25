@@ -1,0 +1,44 @@
+// =============================================================================
+// signatures.json - Cross-version ARM64 wildcards for 1.26.x
+// =============================================================================
+{
+  "version": "1.26.66.1",
+  "targets": [
+    {
+      "name": "ClientInstance_per_frame",
+      "file_va": "0x9b72978",
+      "signature": "FFC302D1FD7B06A9F90000F9F85F08A9F65709A9F44F0AA9FD83019158D03BD5000000D029812791080000F92AC13691F40300AA",
+      "insns": 42,
+      "quality": 487,
+      "UNIQUE": true,
+      "description": "ClientInstance vtable slot[0] - called every frame for per-frame updates"
+    },
+    {
+      "name": "LocalPlayer_slot8",
+      "file_va": "0xaf5d4d8",
+      "signature": "FCA54D4D8...",
+      "insns": 100,
+      "quality": 472,
+      "UNIQUE": true,
+      "description": "LocalPlayer vtable slot[8] - reads pose, camera component, calls camera setup"
+    },
+    {
+      "name": "CameraSetup",
+      "file_va": "0xe830610",
+      "signature": "E30610...",
+      "insns": 50,
+      "quality": 460,
+      "UNIQUE": true,
+      "description": "Camera setup function - called before every frame render"
+    },
+    {
+      "name": "CommandDispatch",
+      "file_va": "0xe804058",
+      "signature": "FFC3...",
+      "insns": 30,
+      "quality": 450,
+      "UNIQUE": true,
+      "description": "Command veneer / camera command dispatch"
+    }
+  ]
+}

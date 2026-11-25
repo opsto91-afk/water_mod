@@ -1,0 +1,10 @@
+{
+  "type": "preload-native",
+  "name": "V3 Cine Mod",
+  "author": "you",
+  "version": "0.3.2-FIXED",
+  "entry": "libcinematic_mod.so",
+  "minecraft_versions": [],
+  "overwrite_files": [],
+  "overwrite_folders": []
+}

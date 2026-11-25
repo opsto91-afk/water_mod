@@ -1,0 +1,20 @@
+Target: libminecraftpe.so, Minecraft Bedrock Android arm64, version 60.4 (give me the exact build id and version string).
+Reference: the open-source mod "Do a Barrel Roll" has byte signatures for 26.52
+(include/dabr/Signatures.hpp) and field offsets (include/dabr/Native.hpp).
+Do NOT give a summary. For every item give raw evidence I can check myself:
+  address (and file offset = address - image base), xrefs, a ~40-line decompile, an arm64 byte signature
+  with ?? on relocated bytes (adrp/add/ldr immediates, bl/b offsets), the match count of that signature
+  in .text (must be exactly 1), and confidence (confirmed / likely / guess). If not found say "not found".
+
+1. For each of the 18 patterns: does it still match exactly once in 60.4?
+   If not, find the same function and give a new signature.
+   (client update, player tick, applyTurn, localTurn, setupCamera, cameraComponent, renderPrep, render,
+    tryGlide, modelRotation, gamepad, uiRender, cursor, onGround, isGliding, inWater, fallFlyTicks, actionBar)
+2. Verify on 60.4 (give the real offsets if they changed):
+   ClientInstance vtable slot 32 = getLocalPlayer, Actor+0x208 (ActorState), Actor+0x218 (rotation: pitch,yaw),
+   ActorState layout (pos +0x0 ? prevPos +0xC ? velocity +0x18), CameraComponent orientation quaternion +0x28.
+   Is Actor position the eye position or the feet position (y)?
+3. Decompile SetupCamera(renderer, camera, partialTick). Find where the camera POSITION (eye Vec3) and/or the
+   view matrix is computed and stored. I need a field I can overwrite before calling the original function
+   (and restore afterwards) to put the camera at ANY world position, independent of the player.
+   Also tell me which object holds the camera FOV.

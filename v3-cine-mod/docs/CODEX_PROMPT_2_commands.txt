@@ -1,0 +1,18 @@
+Target: libminecraftpe.so (Android arm64, Minecraft Bedrock 60.4). First tell me the exact version/build id.
+Do NOT give a summary; give raw evidence (address, xrefs, ~40-line decompile, arm64 byte signature with ??,
+match count in .text = 1, confidence). If not found say "not found".
+
+GOAL: my native mod must run ordinary slash commands inside the game, exactly like the Script API's
+player.runCommand() does: "camera @s set minecraft:free pos ~ ~ ~ rot 0 0", "hud @s hide all",
+"camera @s fade time 0.5 0 0.5", "camera @s clear".
+
+ITEM A - the function that EXECUTES a command string on the local client / integrated server.
+  Start from the command system strings ("commands.generic.unknown", "commands.camera", "hud", "camera"),
+  the Script API runCommand binding, and the chat screen's send handler (what runs when the player types
+  /gamemode creative in chat).
+  I need: address + signature, C++ prototype / arm64 calling convention (x0..x7, sret in x8?), meaning of each
+  argument (command string type, origin object, context struct, flags), how to OBTAIN the objects it needs
+  (singleton / field of ClientInstance, Minecraft, Level ... or must be captured by hooking it once), and how to
+  build a valid origin for the LOCAL PLAYER. Give a minimal concrete recipe to call it from my own thread
+  and say which thread it must run on.
+ITEM B - which thread runs game logic / commands, and a per-tick function I can hook to run my commands there.
