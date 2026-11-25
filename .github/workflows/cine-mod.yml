@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   host-tests:
@@ -51,3 +51,15 @@ jobs:
             v3-cine-mod/dist/cinematic_mod/libcinematic_mod.so
             v3-cine-mod/dist/cinematic_mod/manifest.json
           if-no-files-found: error
+      - name: Publish package on this branch
+        if: github.event_name == 'push' && github.ref == 'refs/heads/arena/c2104487-water-mod'
+        run: |
+          mkdir -p downloads
+          cp v3-cine-mod/dist/cinematic_mod.levipack downloads/cinematic_mod.levipack
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add downloads/cinematic_mod.levipack
+          if ! git diff --cached --quiet; then
+            git commit -m 'Add built Cine Mod package'
+            git push origin HEAD:arena/c2104487-water-mod
+          fi
